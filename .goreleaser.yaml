@@ -25,13 +25,13 @@ checksum:
 
 brews:
   - name: csvops
-    tap:
+    repository:
       owner: maherelgamil
       name: homebrew-tap
-    folder: Formula
+    directory: Formula
     commit_author:
       name: Maher El Gamil
-      email: you@example.com
+      email: maherelgamil@gmail.com
     description: Modular CLI toolkit for working with CSV files
     homepage: https://github.com/maherelgamil/csvops
     install: |
