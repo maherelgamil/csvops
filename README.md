@@ -19,14 +19,15 @@ Or download the binary manually from [Releases](https://github.com/maherelgamil/
 
 ## 🛠 Supported Commands
 
-| Command     | Description                                                  |
-|-------------|--------------------------------------------------------------|
-| `split`     | Split a large CSV file into smaller parts                    |
-| `dedupe`    | Remove duplicate rows by one or more columns                |
-| `filter`    | Filter rows based on column values                          |
-| `stats`     | Show summary statistics (rows, columns, empty/unique counts) |
-| `preview`   | Display the first N rows of a CSV file                      |
-| `merge`     | Combine multiple CSV files into one                         |
+| Command       | Description                                                  |
+|---------------|--------------------------------------------------------------|
+| `split`       | Split a large CSV file into smaller parts                    |
+| `dedupe`      | Remove duplicate rows by one or more columns                |
+| `filter`      | Filter rows based on column values                          |
+| `stats`       | Show summary statistics (rows, columns, empty/unique counts) |
+| `preview`     | Display the first N rows of a CSV file                      |
+| `merge`       | Combine multiple CSV files into one                         |
+| `to-sqlite`   | Convert a CSV file into a SQLite database                   |
 
 📚 See full usage details in [`docs/commands`](./docs/commands)
 
@@ -52,6 +53,9 @@ csvops preview --input data.csv --rows 10
 
 # Merge multiple files
 csvops merge --input file1.csv,file2.csv --output merged.csv
+
+# Convert CSV to SQLite
+csvops to-sqlite --input data.csv --output data.db --table users
 ```
 
 ---
