@@ -10,10 +10,17 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var version = "v0.0.1"
+
+var SetVersion = func(v string) {
+	version = v
+}
+
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-	Use:   "csvops",
-	Short: "A fast and modular CLI toolkit for working with CSV files",
+	Version: version,
+	Use:     "csvops",
+	Short:   "A fast and modular CLI toolkit for working with CSV files",
 	Long: `csvops is a powerful command-line tool written in Go for working with CSV files.
 
 It supports splitting, merging, filtering, validating, deduplication, statistics, and more.

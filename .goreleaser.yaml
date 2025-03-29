@@ -1,0 +1,42 @@
+project_name: csvops
+release:
+  github:
+    owner: maherelgamil
+    name: csvops
+  draft: false
+  prerelease: false
+
+builds:
+  - id: csvops
+    main: ./main.go
+    goos: [darwin, linux, windows]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    binary: csvops
+
+archives:
+  - id: default
+    format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - csvops
+
+checksum:
+  name_template: "checksums.txt"
+
+brews:
+  - name: csvops
+    tap:
+      owner: maherelgamil
+      name: homebrew-tap
+    folder: Formula
+    commit_author:
+      name: Maher El Gamil
+      email: you@example.com
+    description: Modular CLI toolkit for working with CSV files
+    homepage: https://github.com/maherelgamil/csvops
+    install: |
+      bin.install "csvops"
+    test: |
+      system "#{bin}/csvops", "--version"
