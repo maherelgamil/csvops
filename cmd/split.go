@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/csv"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -33,6 +34,28 @@ var splitCmd = &cobra.Command{
 			return
 		}
 
+		lineCounter, err := os.Open(inputPath)
+		if err != nil {
+			fmt.Printf("❌ Failed to open file for counting: %v\n", err)
+			return
+		}
+		lcReader := csv.NewReader(lineCounter)
+		lcReader.Comma = ([]rune(delimiter))[0]
+		total := int64(0)
+		for {
+			_, err := lcReader.Read()
+			if err == io.EOF {
+				break
+			}
+			if err == nil {
+				total++
+			}
+		}
+		lineCounter.Close()
+		if withHeader && total > 0 {
+			total--
+		}
+
 		file, err := os.Open(inputPath)
 		if err != nil {
 			fmt.Printf("❌ Failed to open input file: %v\n", err)
@@ -43,54 +66,67 @@ var splitCmd = &cobra.Command{
 		reader := csv.NewReader(file)
 		reader.Comma = ([]rune(delimiter))[0]
 
-		rows, err := reader.ReadAll()
-		if err != nil {
-			fmt.Printf("❌ Failed to read CSV: %v\n", err)
-			return
-		}
-
-		var header []string
-		startIndex := 0
-		if withHeader {
-			header = rows[0]
-			startIndex = 1
-		}
-
-		totalRows := len(rows) - startIndex
-		bar := progressbar.Default(int64(totalRows), "Splitting")
-
+		header := []string{}
+		rowBuffer := [][]string{}
+		rowCount := 0
 		part := 1
-		for i := startIndex; i < len(rows); i += rowsPerFile {
-			end := i + rowsPerFile
-			if end > len(rows) {
-				end = len(rows)
-			}
 
-			filename := filepath.Join(outputDir, fmt.Sprintf("part_%d.csv", part))
-			outFile, err := os.Create(filename)
+		bar := progressbar.Default(total, "Splitting")
+
+		if withHeader {
+			h, err := reader.Read()
 			if err != nil {
-				fmt.Printf("❌ Failed to create file %s: %v\n", filename, err)
-				continue
+				fmt.Printf("❌ Failed to read header: %v\n", err)
+				return
 			}
-
-			writer := csv.NewWriter(outFile)
-			writer.Comma = ([]rune(delimiter))[0]
-
-			if withHeader {
-				_ = writer.Write(header)
-			}
-
-			for j := i; j < end; j++ {
-				_ = writer.Write(rows[j])
-				bar.Add(1)
-			}
-
-			writer.Flush()
-			outFile.Close()
-
-			part++
+			header = h
 		}
+
+		for {
+			row, err := reader.Read()
+			if err != nil {
+				break
+			}
+			rowBuffer = append(rowBuffer, row)
+			rowCount++
+			bar.Add(1)
+
+			if len(rowBuffer) == rowsPerFile {
+				writeChunk(rowBuffer, header, part)
+				part++
+				rowBuffer = [][]string{}
+			}
+		}
+
+		if len(rowBuffer) > 0 {
+			writeChunk(rowBuffer, header, part)
+		}
+
+		fmt.Printf("\n✅ Finished splitting %d rows into %d file(s).\n", rowCount, part)
 	},
+}
+
+func writeChunk(rows [][]string, header []string, part int) {
+	filename := filepath.Join(outputDir, fmt.Sprintf("part_%d.csv", part))
+	outFile, err := os.Create(filename)
+	if err != nil {
+		fmt.Printf("❌ Failed to create file %s: %v\n", filename, err)
+		return
+	}
+	defer outFile.Close()
+
+	writer := csv.NewWriter(outFile)
+	writer.Comma = ([]rune(delimiter))[0]
+
+	if withHeader {
+		_ = writer.Write(header)
+	}
+
+	for _, row := range rows {
+		_ = writer.Write(row)
+	}
+
+	writer.Flush()
 }
 
 func init() {

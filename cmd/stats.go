@@ -3,11 +3,13 @@ package cmd
 import (
 	"encoding/csv"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
 
 	"github.com/olekukonko/tablewriter"
+	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
 )
 
@@ -30,19 +32,14 @@ var statsCmd = &cobra.Command{
 		defer file.Close()
 
 		reader := csv.NewReader(file)
-		records, err := reader.ReadAll()
-		if err != nil || len(records) < 1 {
-			fmt.Printf("❌ Failed to read CSV or empty file\n")
+		headers, err := reader.Read()
+		if err != nil {
+			fmt.Printf("❌ Failed to read headers: %v\n", err)
 			return
 		}
 
-		headers := records[0]
 		columnCount := len(headers)
-		rowCount := len(records) - 1
-
-		fmt.Printf("\n📊 Stats for: %s\n", statsInput)
-		fmt.Printf("Total Rows (excluding header): %d\n", rowCount)
-		fmt.Printf("Columns: %d\n\n", columnCount)
+		rowCount := 0
 
 		type columnStats struct {
 			empty   int
@@ -54,20 +51,59 @@ var statsCmd = &cobra.Command{
 			stats[i].uniques = make(map[string]int)
 		}
 
-		for _, row := range records[1:] {
-			for i, cell := range row {
-				if strings.TrimSpace(cell) == "" {
-					stats[i].empty++
-				} else {
-					stats[i].uniques[cell]++
-				}
+		// Pre-scan for progress bar
+		totalRows := int64(0)
+		counter, _ := os.Open(statsInput)
+		defer counter.Close()
+		countReader := csv.NewReader(counter)
+		countReader.Read() // skip header
+		for {
+			_, err := countReader.Read()
+			if err == io.EOF {
+				break
+			}
+			if err == nil {
+				totalRows++
 			}
 		}
+
+		bar := progressbar.Default(totalRows, "Analyzing")
+
+		for {
+			row, err := reader.Read()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				continue
+			}
+			rowCount++
+
+			for i := range headers {
+				if i < len(row) {
+					cell := strings.TrimSpace(row[i])
+					if cell == "" {
+						stats[i].empty++
+					} else {
+						stats[i].uniques[cell]++
+					}
+				} else {
+					stats[i].empty++
+				}
+			}
+
+			bar.Add(1)
+		}
+
+		fmt.Printf("\n📊 Stats for: %s\n", statsInput)
+		fmt.Printf("Total Rows (excluding header): %d\n", rowCount)
+		fmt.Printf("Columns: %d\n\n", columnCount)
 
 		table := tablewriter.NewWriter(os.Stdout)
 		table.SetHeader([]string{"Column", "Unique Values", "Empty Fields", "Top 3 Values"})
 		table.SetAutoWrapText(false)
 		table.SetRowLine(true)
+		table.SetAlignment(tablewriter.ALIGN_LEFT)
 
 		for i, name := range headers {
 			uniqueCount := len(stats[i].uniques)

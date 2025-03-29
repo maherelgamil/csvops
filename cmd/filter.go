@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/csv"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -33,6 +34,28 @@ var filterCmd = &cobra.Command{
 			return
 		}
 
+		// Count total rows for progress bar
+		totalLines := int64(0)
+		lineCounter, err := os.Open(filterInput)
+		if err != nil {
+			fmt.Printf("❌ Failed to open input file: %v\n", err)
+			return
+		}
+		lcReader := csv.NewReader(lineCounter)
+		for {
+			_, err := lcReader.Read()
+			if err == io.EOF {
+				break
+			}
+			if err == nil {
+				totalLines++
+			}
+		}
+		lineCounter.Close()
+		if totalLines > 0 {
+			totalLines--
+		}
+
 		file, err := os.Open(filterInput)
 		if err != nil {
 			fmt.Printf("❌ Failed to open input file: %v\n", err)
@@ -41,18 +64,12 @@ var filterCmd = &cobra.Command{
 		defer file.Close()
 
 		reader := csv.NewReader(file)
-		records, err := reader.ReadAll()
+		headers, err := reader.Read()
 		if err != nil {
-			fmt.Printf("❌ Failed to read CSV: %v\n", err)
+			fmt.Printf("❌ Failed to read headers: %v\n", err)
 			return
 		}
 
-		if len(records) < 1 {
-			fmt.Println("⚠️  Empty CSV file")
-			return
-		}
-
-		headers := records[0]
 		colIndex := -1
 		for i, col := range headers {
 			if col == filterColumn {
@@ -60,20 +77,28 @@ var filterCmd = &cobra.Command{
 				break
 			}
 		}
-
 		if colIndex == -1 {
 			fmt.Printf("❌ Column '%s' not found\n", filterColumn)
 			return
 		}
 
-		bar := progressbar.Default(int64(len(records)-1), "Filtering")
-
+		bar := progressbar.Default(totalLines, "Filtering")
 		filtered := [][]string{}
 		if filterWithHeader {
 			filtered = append(filtered, headers)
 		}
 
-		for _, row := range records[1:] {
+		matchCount := 0
+		for {
+			row, err := reader.Read()
+			if err == io.EOF {
+				break
+			}
+			if err != nil || len(row) <= colIndex {
+				bar.Add(1)
+				continue
+			}
+
 			val := row[colIndex]
 			match := false
 
@@ -98,6 +123,7 @@ var filterCmd = &cobra.Command{
 
 			if match {
 				filtered = append(filtered, row)
+				matchCount++
 			}
 			bar.Add(1)
 		}
@@ -119,7 +145,7 @@ var filterCmd = &cobra.Command{
 			return
 		}
 
-		fmt.Printf("✅ Filter complete. %d rows matched.\n", len(filtered)-1)
+		fmt.Printf("\n✅ Filter complete. %d rows matched out of %d total.\n", matchCount, totalLines)
 	},
 }
 
@@ -136,4 +162,7 @@ func init() {
 	filterCmd.Flags().BoolVar(&enableGt, "enable-gt", false, "Enable --gt filter")
 	filterCmd.Flags().BoolVar(&enableLt, "enable-lt", false, "Enable --lt filter")
 	filterCmd.Flags().BoolVar(&filterWithHeader, "with-header", true, "Include header in output")
+
+	filterCmd.MarkFlagRequired("input")
+	filterCmd.MarkFlagRequired("column")
 }

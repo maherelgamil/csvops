@@ -5,6 +5,7 @@ Copyright © 2025 Maher El Gamil
 package cmd
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -12,31 +13,40 @@ import (
 
 var version = "v0.0.1"
 
+// SetVersion allows dynamic version injection during build
 var SetVersion = func(v string) {
 	version = v
 }
 
-// rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-	Version: version,
-	Use:     "csvops",
-	Short:   "A fast and modular CLI toolkit for working with CSV files",
-	Long: `csvops is a powerful command-line tool written in Go for working with CSV files.
+	Use:   "csvops",
+	Short: "A fast and modular CLI toolkit for working with CSV files",
+	Long: `📊 csvops is a blazing fast, modular CLI tool for working with CSV files.
 
-It supports splitting, merging, filtering, validating, deduplication, statistics, and more.
-Perfect for data engineers, analysts, and developers who want terminal-first CSV workflows.`,
+Built in Go, designed for humans — ideal for data engineers, analysts, and developers.
+Supports operations like:
+  • split      - break large files into chunks
+  • merge      - combine CSV files
+  • dedupe     - remove duplicates by column
+  • filter     - filter rows by condition
+  • stats      - get descriptive statistics
+  • preview    - preview first N rows
+  • to-sqlite  - convert to SQLite
+... and more coming soon!`,
+
+	Version:       version,
+	SilenceUsage:  true,
+	SilenceErrors: true,
 }
 
-// Execute adds all child commands to the root command and sets flags appropriately.
-// This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute() {
-	err := rootCmd.Execute()
-	if err != nil {
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
 		os.Exit(1)
 	}
 }
 
 func init() {
-	// You can define persistent flags here
-	// rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.csvops.yaml)")
+	// Optionally define global flags here
+	// rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "Optional config file (default is $HOME/.csvops.yaml)")
 }

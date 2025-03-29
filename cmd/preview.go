@@ -3,9 +3,11 @@ package cmd
 import (
 	"encoding/csv"
 	"fmt"
+	"io"
+	"os"
+
 	"github.com/olekukonko/tablewriter"
 	"github.com/spf13/cobra"
-	"os"
 )
 
 var (
@@ -31,36 +33,55 @@ var previewCmd = &cobra.Command{
 		defer file.Close()
 
 		reader := csv.NewReader(file)
-		records, err := reader.ReadAll()
-		if err != nil || len(records) == 0 {
-			fmt.Printf("❌ Failed to read CSV or file is empty\n")
-			return
-		}
+		headers := []string{}
+		rows := [][]string{}
+		count := 0
 
-		start := 0
 		if !previewNoHeader {
-			start = 1
+			headers, err = reader.Read()
+			if err != nil {
+				fmt.Printf("❌ Failed to read header: %v\n", err)
+				return
+			}
 		}
 
-		limit := previewRows
-		if limit > len(records)-start {
-			limit = len(records) - start
+		for {
+			if count >= previewRows {
+				break
+			}
+			record, err := reader.Read()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				fmt.Printf("⚠️  Skipping row due to error: %v\n", err)
+				continue
+			}
+			rows = append(rows, record)
+			count++
+		}
+
+		if len(rows) == 0 {
+			fmt.Println("⚠️  No data rows found")
+			return
 		}
 
 		table := tablewriter.NewWriter(os.Stdout)
 		table.SetAutoWrapText(false)
 		table.SetHeaderAlignment(tablewriter.ALIGN_LEFT)
 		table.SetAlignment(tablewriter.ALIGN_LEFT)
+		table.SetRowLine(true)
 
 		if !previewNoHeader {
-			table.SetHeader(records[0])
+			table.SetHeader(headers)
 		}
 
-		for _, row := range records[start : start+limit] {
+		for _, row := range rows {
 			table.Append(row)
 		}
 
 		table.Render()
+		fmt.Printf("\n📄 Showing %d row(s) from '%s'\n", len(rows), previewInput)
 	},
 }
 

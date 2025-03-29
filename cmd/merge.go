@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/schollz/progressbar/v3"
@@ -27,6 +28,20 @@ var mergeCmd = &cobra.Command{
 			return
 		}
 
+		csvFiles := []string{}
+		for _, f := range files {
+			if strings.HasSuffix(strings.ToLower(f.Name()), ".csv") {
+				csvFiles = append(csvFiles, filepath.Join(mergeInputDir, f.Name()))
+			}
+		}
+
+		if len(csvFiles) == 0 {
+			fmt.Println("⚠️  No CSV files found to merge.")
+			return
+		}
+
+		sort.Strings(csvFiles) // ensure consistent order
+
 		outFile, err := os.Create(mergeOutput)
 		if err != nil {
 			fmt.Printf("❌ Failed to create output file: %v\n", err)
@@ -39,50 +54,36 @@ var mergeCmd = &cobra.Command{
 		fileCount := 0
 		rowCount := 0
 
-		totalFiles := 0
-		for _, f := range files {
-			if strings.HasSuffix(f.Name(), ".csv") {
-				totalFiles++
-			}
-		}
+		bar := progressbar.Default(int64(len(csvFiles)), "Merging")
 
-		bar := progressbar.Default(int64(totalFiles), "Merging")
-
-		for _, file := range files {
-			if !strings.HasSuffix(file.Name(), ".csv") {
-				continue
-			}
-
-			path := filepath.Join(mergeInputDir, file.Name())
+		for _, path := range csvFiles {
 			f, err := os.Open(path)
 			if err != nil {
-				fmt.Printf("⚠️  Skipping %s: %v\n", file.Name(), err)
+				fmt.Printf("⚠️  Skipping %s: %v\n", filepath.Base(path), err)
+				bar.Add(1)
 				continue
 			}
 
 			reader := csv.NewReader(f)
-			head := false
-			if mergeWithHeader {
-				head = true
-			}
-
 			records, err := reader.ReadAll()
 			f.Close()
 			if err != nil {
-				fmt.Printf("⚠️  Skipping %s due to error: %v\n", file.Name(), err)
+				fmt.Printf("⚠️  Skipping %s due to error: %v\n", filepath.Base(path), err)
+				bar.Add(1)
 				continue
 			}
 
 			if len(records) == 0 {
+				bar.Add(1)
 				continue
 			}
 
 			start := 0
-			if head && !writtenHeader {
+			if mergeWithHeader && !writtenHeader {
 				_ = writer.Write(records[0])
 				writtenHeader = true
 				start = 1
-			} else if head {
+			} else if mergeWithHeader {
 				start = 1
 			}
 
@@ -106,8 +107,5 @@ func init() {
 	mergeCmd.Flags().StringVar(&mergeInputDir, "input-dir", "", "Directory containing CSV files to merge")
 	mergeCmd.Flags().StringVar(&mergeOutput, "output", "merged.csv", "Path for the output CSV file")
 	mergeCmd.Flags().BoolVar(&mergeWithHeader, "with-header", true, "Include headers from the first file")
-	err := mergeCmd.MarkFlagRequired("input-dir")
-	if err != nil {
-		return
-	}
+	_ = mergeCmd.MarkFlagRequired("input-dir")
 }
