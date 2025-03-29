@@ -3,6 +3,7 @@ module github.com/maherelgamil/csvops
 go 1.22.5
 
 require (
+	github.com/mattn/go-sqlite3 v1.14.24
 	github.com/olekukonko/tablewriter v0.0.5
 	github.com/schollz/progressbar/v3 v3.18.0
 	github.com/spf13/cobra v1.9.1
