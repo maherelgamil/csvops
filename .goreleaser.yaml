@@ -19,8 +19,6 @@ archives:
   - id: default
     format: tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    files:
-      - csvops
 
 checksum:
   name_template: "checksums.txt"
