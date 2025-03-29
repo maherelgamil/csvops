@@ -2,3 +2,5 @@
 /.idea
 *.csv
 /dist
+csvops
+*.db

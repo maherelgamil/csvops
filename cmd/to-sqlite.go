@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -33,7 +34,9 @@ var toSqliteCmd = &cobra.Command{
 
 		if csvToSqliteTable == "" {
 			base := filepath.Base(csvToSqliteInput)
-			csvToSqliteTable = strings.TrimSuffix(base, filepath.Ext(base))
+			name := strings.TrimSuffix(base, filepath.Ext(base))
+			cleanName := regexp.MustCompile(`[^a-zA-Z0-9_]`).ReplaceAllString(name, "_")
+			csvToSqliteTable = cleanName
 		}
 
 		reader := csv.NewReader(file)
