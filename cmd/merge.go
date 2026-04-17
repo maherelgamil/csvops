@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/csv"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -21,15 +22,17 @@ var (
 var mergeCmd = &cobra.Command{
 	Use:   "merge",
 	Short: "Merge multiple CSV files into one",
-	Run: func(cmd *cobra.Command, args []string) {
-		files, err := os.ReadDir(mergeInputDir)
+	RunE: func(cmd *cobra.Command, args []string) error {
+		entries, err := os.ReadDir(mergeInputDir)
 		if err != nil {
-			fmt.Printf("❌ Failed to read input directory: %v\n", err)
-			return
+			return fmt.Errorf("failed to read input directory: %w", err)
 		}
 
 		csvFiles := []string{}
-		for _, f := range files {
+		for _, f := range entries {
+			if f.IsDir() {
+				continue
+			}
 			if strings.HasSuffix(strings.ToLower(f.Name()), ".csv") {
 				csvFiles = append(csvFiles, filepath.Join(mergeInputDir, f.Name()))
 			}
@@ -37,19 +40,20 @@ var mergeCmd = &cobra.Command{
 
 		if len(csvFiles) == 0 {
 			fmt.Println("⚠️  No CSV files found to merge.")
-			return
+			return nil
 		}
 
-		sort.Strings(csvFiles) // ensure consistent order
+		sort.Strings(csvFiles)
 
 		outFile, err := os.Create(mergeOutput)
 		if err != nil {
-			fmt.Printf("❌ Failed to create output file: %v\n", err)
-			return
+			return fmt.Errorf("failed to create output file: %w", err)
 		}
 		defer outFile.Close()
 
 		writer := csv.NewWriter(outFile)
+		defer writer.Flush()
+
 		writtenHeader := false
 		fileCount := 0
 		rowCount := 0
@@ -57,48 +61,67 @@ var mergeCmd = &cobra.Command{
 		bar := progressbar.Default(int64(len(csvFiles)), "Merging")
 
 		for _, path := range csvFiles {
-			f, err := os.Open(path)
+			n, err := streamMergeFile(path, writer, mergeWithHeader, &writtenHeader)
 			if err != nil {
 				fmt.Printf("⚠️  Skipping %s: %v\n", filepath.Base(path), err)
-				bar.Add(1)
+				_ = bar.Add(1)
 				continue
 			}
-
-			reader := csv.NewReader(f)
-			records, err := reader.ReadAll()
-			f.Close()
-			if err != nil {
-				fmt.Printf("⚠️  Skipping %s due to error: %v\n", filepath.Base(path), err)
-				bar.Add(1)
-				continue
-			}
-
-			if len(records) == 0 {
-				bar.Add(1)
-				continue
-			}
-
-			start := 0
-			if mergeWithHeader && !writtenHeader {
-				_ = writer.Write(records[0])
-				writtenHeader = true
-				start = 1
-			} else if mergeWithHeader {
-				start = 1
-			}
-
-			for _, row := range records[start:] {
-				_ = writer.Write(row)
-				rowCount++
-			}
-
+			rowCount += n
 			fileCount++
-			bar.Add(1)
+			_ = bar.Add(1)
 		}
 
 		writer.Flush()
+		if err := writer.Error(); err != nil {
+			return fmt.Errorf("writer error: %w", err)
+		}
+
 		fmt.Printf("\n✅ Merged %d CSV files into %s (%d rows)\n", fileCount, mergeOutput, rowCount)
+		return nil
 	},
+}
+
+// streamMergeFile streams a single CSV file into the shared writer.
+// writtenHeader is shared across calls so the header is emitted only once.
+func streamMergeFile(path string, writer *csv.Writer, withHeader bool, writtenHeader *bool) (int, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+
+	r := csv.NewReader(f)
+	r.FieldsPerRecord = -1
+
+	first := true
+	count := 0
+	for {
+		row, err := r.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return count, err
+		}
+		if first {
+			first = false
+			if withHeader {
+				if !*writtenHeader {
+					if err := writer.Write(row); err != nil {
+						return count, err
+					}
+					*writtenHeader = true
+				}
+				continue
+			}
+		}
+		if err := writer.Write(row); err != nil {
+			return count, err
+		}
+		count++
+	}
+	return count, nil
 }
 
 func init() {

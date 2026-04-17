@@ -13,37 +13,45 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var statsInput string
+var (
+	statsInput     string
+	statsMaxUnique int
+)
 
 var statsCmd = &cobra.Command{
 	Use:   "stats",
 	Short: "Display basic statistics about a CSV file",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		if statsInput == "" {
-			fmt.Println("❌ Please provide an input file using --input")
-			return
+			return fmt.Errorf("please provide an input file using --input")
+		}
+
+		totalRows, err := countDataRows(statsInput, ',')
+		if err != nil {
+			return err
 		}
 
 		file, err := os.Open(statsInput)
 		if err != nil {
-			fmt.Printf("❌ Failed to open file: %v\n", err)
-			return
+			return fmt.Errorf("failed to open file: %w", err)
 		}
 		defer file.Close()
 
 		reader := csv.NewReader(file)
+		reader.FieldsPerRecord = -1
+
 		headers, err := reader.Read()
 		if err != nil {
-			fmt.Printf("❌ Failed to read headers: %v\n", err)
-			return
+			return fmt.Errorf("failed to read headers: %w", err)
 		}
 
 		columnCount := len(headers)
-		rowCount := 0
 
 		type columnStats struct {
-			empty   int
-			uniques map[string]int
+			empty     int
+			uniques   map[string]int
+			capped    bool
+			totalVals int
 		}
 
 		stats := make([]columnStats, columnCount)
@@ -51,23 +59,8 @@ var statsCmd = &cobra.Command{
 			stats[i].uniques = make(map[string]int)
 		}
 
-		// Pre-scan for progress bar
-		totalRows := int64(0)
-		counter, _ := os.Open(statsInput)
-		defer counter.Close()
-		countReader := csv.NewReader(counter)
-		countReader.Read() // skip header
-		for {
-			_, err := countReader.Read()
-			if err == io.EOF {
-				break
-			}
-			if err == nil {
-				totalRows++
-			}
-		}
-
 		bar := progressbar.Default(totalRows, "Analyzing")
+		rowCount := 0
 
 		for {
 			row, err := reader.Read()
@@ -78,21 +71,27 @@ var statsCmd = &cobra.Command{
 				continue
 			}
 			rowCount++
-
 			for i := range headers {
+				cell := ""
 				if i < len(row) {
-					cell := strings.TrimSpace(row[i])
-					if cell == "" {
-						stats[i].empty++
-					} else {
+					cell = strings.TrimSpace(row[i])
+				}
+				if cell == "" {
+					stats[i].empty++
+					continue
+				}
+				stats[i].totalVals++
+				if statsMaxUnique > 0 && len(stats[i].uniques) >= statsMaxUnique {
+					if _, exists := stats[i].uniques[cell]; exists {
 						stats[i].uniques[cell]++
+					} else {
+						stats[i].capped = true
 					}
 				} else {
-					stats[i].empty++
+					stats[i].uniques[cell]++
 				}
 			}
-
-			bar.Add(1)
+			_ = bar.Add(1)
 		}
 
 		fmt.Printf("\n📊 Stats for: %s\n", statsInput)
@@ -105,20 +104,23 @@ var statsCmd = &cobra.Command{
 		table.SetRowLine(true)
 		table.SetAlignment(tablewriter.ALIGN_LEFT)
 
-		for i, name := range headers {
-			uniqueCount := len(stats[i].uniques)
-			emptyCount := stats[i].empty
+		type kv struct {
+			Key   string
+			Count int
+		}
 
-			type kv struct {
-				Key   string
-				Count int
+		for i, name := range headers {
+			uniqueCount := fmt.Sprintf("%d", len(stats[i].uniques))
+			if stats[i].capped {
+				uniqueCount = fmt.Sprintf(">=%d (capped)", len(stats[i].uniques))
 			}
-			var sorted []kv
+
+			sorted := make([]kv, 0, len(stats[i].uniques))
 			for k, v := range stats[i].uniques {
 				sorted = append(sorted, kv{k, v})
 			}
-			sort.Slice(sorted, func(i, j int) bool {
-				return sorted[i].Count > sorted[j].Count
+			sort.Slice(sorted, func(a, b int) bool {
+				return sorted[a].Count > sorted[b].Count
 			})
 
 			topValues := []string{}
@@ -128,17 +130,19 @@ var statsCmd = &cobra.Command{
 
 			table.Append([]string{
 				name,
-				fmt.Sprintf("%d", uniqueCount),
-				fmt.Sprintf("%d", emptyCount),
+				uniqueCount,
+				fmt.Sprintf("%d", stats[i].empty),
 				strings.Join(topValues, ", "),
 			})
 		}
 
 		table.Render()
+		return nil
 	},
 }
 
 func init() {
 	rootCmd.AddCommand(statsCmd)
 	statsCmd.Flags().StringVar(&statsInput, "input", "", "Input CSV file path")
+	statsCmd.Flags().IntVar(&statsMaxUnique, "max-unique", 100000, "Max unique values tracked per column (0 = unlimited)")
 }

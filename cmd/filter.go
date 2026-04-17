@@ -20,54 +20,44 @@ var (
 	containsValue    string
 	gtValue          float64
 	ltValue          float64
-	enableGt         bool
-	enableLt         bool
 	filterWithHeader bool
+	filterMatchAll   bool
 )
 
 var filterCmd = &cobra.Command{
 	Use:   "filter",
 	Short: "Filter rows based on a column condition",
-	Run: func(cmd *cobra.Command, args []string) {
-		if filterInput == "" || filterColumn == "" {
-			fmt.Println("❌ Please provide --input and --column")
-			return
+	Long: `Filter rows based on a column condition.
+
+By default rows match if ANY provided condition matches (OR).
+Use --all to require ALL provided conditions to match (AND).
+Flags --eq, --contains, --gt, --lt are only applied when explicitly set,
+so matching empty strings via --eq="" works correctly.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		eqSet := cmd.Flags().Changed("eq")
+		containsSet := cmd.Flags().Changed("contains")
+		gtSet := cmd.Flags().Changed("gt")
+		ltSet := cmd.Flags().Changed("lt")
+
+		if !eqSet && !containsSet && !gtSet && !ltSet {
+			return fmt.Errorf("at least one of --eq, --contains, --gt, --lt must be provided")
 		}
 
-		// Count total rows for progress bar
-		totalLines := int64(0)
-		lineCounter, err := os.Open(filterInput)
+		totalLines, err := countDataRows(filterInput, ',')
 		if err != nil {
-			fmt.Printf("❌ Failed to open input file: %v\n", err)
-			return
-		}
-		lcReader := csv.NewReader(lineCounter)
-		for {
-			_, err := lcReader.Read()
-			if err == io.EOF {
-				break
-			}
-			if err == nil {
-				totalLines++
-			}
-		}
-		lineCounter.Close()
-		if totalLines > 0 {
-			totalLines--
+			return err
 		}
 
 		file, err := os.Open(filterInput)
 		if err != nil {
-			fmt.Printf("❌ Failed to open input file: %v\n", err)
-			return
+			return fmt.Errorf("failed to open input file: %w", err)
 		}
 		defer file.Close()
 
 		reader := csv.NewReader(file)
 		headers, err := reader.Read()
 		if err != nil {
-			fmt.Printf("❌ Failed to read headers: %v\n", err)
-			return
+			return fmt.Errorf("failed to read headers: %w", err)
 		}
 
 		colIndex := -1
@@ -78,75 +68,93 @@ var filterCmd = &cobra.Command{
 			}
 		}
 		if colIndex == -1 {
-			fmt.Printf("❌ Column '%s' not found\n", filterColumn)
-			return
-		}
-
-		bar := progressbar.Default(totalLines, "Filtering")
-		filtered := [][]string{}
-		if filterWithHeader {
-			filtered = append(filtered, headers)
-		}
-
-		matchCount := 0
-		for {
-			row, err := reader.Read()
-			if err == io.EOF {
-				break
-			}
-			if err != nil || len(row) <= colIndex {
-				bar.Add(1)
-				continue
-			}
-
-			val := row[colIndex]
-			match := false
-
-			if eqValue != "" && val == eqValue {
-				match = true
-			}
-			if containsValue != "" && strings.Contains(strings.ToLower(val), strings.ToLower(containsValue)) {
-				match = true
-			}
-			if enableGt {
-				num, err := strconv.ParseFloat(val, 64)
-				if err == nil && num > gtValue {
-					match = true
-				}
-			}
-			if enableLt {
-				num, err := strconv.ParseFloat(val, 64)
-				if err == nil && num < ltValue {
-					match = true
-				}
-			}
-
-			if match {
-				filtered = append(filtered, row)
-				matchCount++
-			}
-			bar.Add(1)
+			return fmt.Errorf("column %q not found", filterColumn)
 		}
 
 		out := os.Stdout
 		if filterOutput != "" {
 			out, err = os.Create(filterOutput)
 			if err != nil {
-				fmt.Printf("❌ Failed to create output file: %v\n", err)
-				return
+				return fmt.Errorf("failed to create output file: %w", err)
 			}
 			defer out.Close()
 		}
 
 		writer := csv.NewWriter(out)
-		err = writer.WriteAll(filtered)
-		if err != nil {
-			fmt.Printf("❌ Failed to write output: %v\n", err)
-			return
+		if filterWithHeader {
+			if err := writer.Write(headers); err != nil {
+				return fmt.Errorf("failed to write header: %w", err)
+			}
 		}
 
-		fmt.Printf("\n✅ Filter complete. %d rows matched out of %d total.\n", matchCount, totalLines)
+		bar := progressbar.Default(totalLines, "Filtering")
+		matchCount := 0
+
+		for {
+			row, err := reader.Read()
+			if err == io.EOF {
+				break
+			}
+			if err != nil || len(row) <= colIndex {
+				_ = bar.Add(1)
+				continue
+			}
+
+			val := row[colIndex]
+			match := rowMatches(val, eqSet, containsSet, gtSet, ltSet, filterMatchAll)
+
+			if match {
+				if err := writer.Write(row); err != nil {
+					return fmt.Errorf("failed to write row: %w", err)
+				}
+				matchCount++
+			}
+			_ = bar.Add(1)
+		}
+
+		writer.Flush()
+		if err := writer.Error(); err != nil {
+			return fmt.Errorf("writer error: %w", err)
+		}
+
+		fmt.Fprintf(os.Stderr, "\n✅ Filter complete. %d rows matched out of %d total.\n", matchCount, totalLines)
+		return nil
 	},
+}
+
+func rowMatches(val string, eqSet, containsSet, gtSet, ltSet, all bool) bool {
+	checks := []bool{}
+	if eqSet {
+		checks = append(checks, val == eqValue)
+	}
+	if containsSet {
+		checks = append(checks, strings.Contains(strings.ToLower(val), strings.ToLower(containsValue)))
+	}
+	if gtSet {
+		num, err := strconv.ParseFloat(val, 64)
+		checks = append(checks, err == nil && num > gtValue)
+	}
+	if ltSet {
+		num, err := strconv.ParseFloat(val, 64)
+		checks = append(checks, err == nil && num < ltValue)
+	}
+	if len(checks) == 0 {
+		return false
+	}
+	if all {
+		for _, c := range checks {
+			if !c {
+				return false
+			}
+		}
+		return true
+	}
+	for _, c := range checks {
+		if c {
+			return true
+		}
+	}
+	return false
 }
 
 func init() {
@@ -159,10 +167,9 @@ func init() {
 	filterCmd.Flags().StringVar(&containsValue, "contains", "", "Substring match (case-insensitive)")
 	filterCmd.Flags().Float64Var(&gtValue, "gt", 0, "Greater than (number)")
 	filterCmd.Flags().Float64Var(&ltValue, "lt", 0, "Less than (number)")
-	filterCmd.Flags().BoolVar(&enableGt, "enable-gt", false, "Enable --gt filter")
-	filterCmd.Flags().BoolVar(&enableLt, "enable-lt", false, "Enable --lt filter")
 	filterCmd.Flags().BoolVar(&filterWithHeader, "with-header", true, "Include header in output")
+	filterCmd.Flags().BoolVar(&filterMatchAll, "all", false, "Require ALL conditions to match (AND) instead of ANY (OR)")
 
-	filterCmd.MarkFlagRequired("input")
-	filterCmd.MarkFlagRequired("column")
+	_ = filterCmd.MarkFlagRequired("input")
+	_ = filterCmd.MarkFlagRequired("column")
 }

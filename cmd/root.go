@@ -11,11 +11,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var version = "v0.0.1"
+var version = "dev"
 
 // SetVersion allows dynamic version injection during build
 var SetVersion = func(v string) {
 	version = v
+	rootCmd.Version = v
 }
 
 var rootCmd = &cobra.Command{

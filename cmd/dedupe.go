@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/schollz/progressbar/v3"
@@ -22,137 +23,168 @@ var (
 var dedupeCmd = &cobra.Command{
 	Use:   "dedupe",
 	Short: "Remove duplicate rows from a CSV file based on key column(s)",
-	Run: func(cmd *cobra.Command, args []string) {
-		if dedupeInput == "" || dedupeOutput == "" || dedupeKeyColumns == "" {
-			fmt.Println("❌ Please provide --input, --output, and --key flags")
-			return
-		}
-
-		// Count lines for progress bar
-		totalLines := int64(0)
-		counterFile, _ := os.Open(dedupeInput)
-		defer counterFile.Close()
-		counterReader := csv.NewReader(counterFile)
-		for {
-			_, err := counterReader.Read()
-			if err == io.EOF {
-				break
-			}
-			if err == nil {
-				totalLines++
-			}
-		}
-		if totalLines > 0 {
-			totalLines-- // exclude header
+	RunE: func(cmd *cobra.Command, args []string) error {
+		totalLines, err := countDataRows(dedupeInput, ',')
+		if err != nil {
+			return err
 		}
 
 		inFile, err := os.Open(dedupeInput)
 		if err != nil {
-			fmt.Printf("❌ Failed to open input file: %v\n", err)
-			return
+			return fmt.Errorf("failed to open input file: %w", err)
 		}
 		defer inFile.Close()
 
 		reader := csv.NewReader(inFile)
 		headers, err := reader.Read()
 		if err != nil {
-			fmt.Printf("❌ Failed to read headers: %v\n", err)
-			return
+			return fmt.Errorf("failed to read headers: %w", err)
 		}
 
 		keyCols := strings.Split(dedupeKeyColumns, ",")
 		keyIndexes := make([]int, 0, len(keyCols))
 		for _, key := range keyCols {
+			lookup := key
+			if !caseSensitiveDedupe {
+				lookup = strings.ToLower(lookup)
+			}
 			found := false
 			for i, h := range headers {
 				colName := h
 				if !caseSensitiveDedupe {
 					colName = strings.ToLower(h)
-					key = strings.ToLower(key)
 				}
-				if colName == key {
+				if colName == lookup {
 					keyIndexes = append(keyIndexes, i)
 					found = true
 					break
 				}
 			}
 			if !found {
-				fmt.Printf("❌ Column '%s' not found in headers\n", key)
-				return
+				return fmt.Errorf("column %q not found in headers", key)
 			}
 		}
 
-		seen := make(map[string]int)
 		tempPath := dedupeOutput + ".tmp"
 		outFile, err := os.Create(tempPath)
 		if err != nil {
-			fmt.Printf("❌ Failed to create temp output file: %v\n", err)
-			return
+			return fmt.Errorf("failed to create temp output file: %w", err)
 		}
-		defer outFile.Close()
 
 		writer := csv.NewWriter(outFile)
-		_ = writer.Write(headers)
+		if err := writer.Write(headers); err != nil {
+			outFile.Close()
+			return fmt.Errorf("failed to write header: %w", err)
+		}
 
-		rows := [][]string{}
 		bar := progressbar.Default(totalLines, "Deduplicating")
-		rowIndex := 1
 		duplicates := 0
-		for {
-			row, err := reader.Read()
-			if err != nil {
-				break
-			}
-			if len(row) < len(headers) {
-				bar.Add(1)
-				continue
-			}
-			var keyParts []string
-			for _, idx := range keyIndexes {
-				val := row[idx]
-				if !caseSensitiveDedupe {
-					val = strings.ToLower(val)
-				}
-				keyParts = append(keyParts, val)
-			}
-			key := strings.Join(keyParts, "||")
+		unique := 0
 
-			if dedupeKeepLast {
+		if dedupeKeepLast {
+			// Must buffer everything: we only know "last" after seeing all rows.
+			rows := [][]string{}
+			seen := make(map[string]int) // key -> index into rows
+			rowIdx := 0
+			for {
+				row, err := reader.Read()
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					_ = bar.Add(1)
+					continue
+				}
+				if len(row) < len(headers) {
+					_ = bar.Add(1)
+					continue
+				}
+				key := buildDedupeKey(row, keyIndexes, caseSensitiveDedupe)
 				if _, exists := seen[key]; exists {
 					duplicates++
 				}
-				seen[key] = len(rows)
 				rows = append(rows, row)
-			} else if _, exists := seen[key]; !exists {
-				seen[key] = len(rows)
-				rows = append(rows, row)
-			} else {
-				duplicates++
+				seen[key] = rowIdx
+				rowIdx++
+				_ = bar.Add(1)
 			}
-
-			bar.Add(1)
-			rowIndex++
-		}
-
-		for _, idx := range seen {
-			_ = writer.Write(rows[idx])
+			// Emit kept rows in original file order.
+			kept := make([]int, 0, len(seen))
+			for _, idx := range seen {
+				kept = append(kept, idx)
+			}
+			sort.Ints(kept)
+			for _, idx := range kept {
+				if err := writer.Write(rows[idx]); err != nil {
+					outFile.Close()
+					return fmt.Errorf("failed to write row: %w", err)
+				}
+			}
+			unique = len(kept)
+		} else {
+			// keep-first: stream rows directly as we encounter them.
+			seen := make(map[string]struct{})
+			for {
+				row, err := reader.Read()
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					_ = bar.Add(1)
+					continue
+				}
+				if len(row) < len(headers) {
+					_ = bar.Add(1)
+					continue
+				}
+				key := buildDedupeKey(row, keyIndexes, caseSensitiveDedupe)
+				if _, exists := seen[key]; exists {
+					duplicates++
+				} else {
+					seen[key] = struct{}{}
+					if err := writer.Write(row); err != nil {
+						outFile.Close()
+						return fmt.Errorf("failed to write row: %w", err)
+					}
+					unique++
+				}
+				_ = bar.Add(1)
+			}
 		}
 
 		writer.Flush()
-
-		// Handle in-place overwrite
-		if dedupeOutput == dedupeInput {
-			os.Remove(dedupeInput)
+		if err := writer.Error(); err != nil {
+			outFile.Close()
+			return fmt.Errorf("writer error: %w", err)
 		}
-		err = os.Rename(tempPath, dedupeOutput)
-		if err != nil {
-			fmt.Printf("❌ Failed to rename temp file: %v\n", err)
-			return
+		if err := outFile.Close(); err != nil {
+			return fmt.Errorf("failed to close output: %w", err)
+		}
+
+		// Close input before rename for Windows compatibility when overwriting in place.
+		if dedupeOutput == dedupeInput {
+			inFile.Close()
+		}
+		if err := os.Rename(tempPath, dedupeOutput); err != nil {
+			return fmt.Errorf("failed to rename temp file: %w", err)
 		}
 
 		fmt.Printf("\n✅ Duplicates removed. Output written to %s\n", dedupeOutput)
-		fmt.Printf("📊 Total rows: %d | Unique: %d | Duplicates removed: %d\n", totalLines, len(seen), duplicates)
+		fmt.Printf("📊 Total rows: %d | Unique: %d | Duplicates removed: %d\n", totalLines, unique, duplicates)
+		return nil
 	},
+}
+
+func buildDedupeKey(row []string, indexes []int, caseSensitive bool) string {
+	parts := make([]string, len(indexes))
+	for i, idx := range indexes {
+		v := row[idx]
+		if !caseSensitive {
+			v = strings.ToLower(v)
+		}
+		parts[i] = v
+	}
+	return strings.Join(parts, "||")
 }
 
 func init() {
@@ -164,7 +196,7 @@ func init() {
 	dedupeCmd.Flags().BoolVar(&dedupeKeepLast, "keep-last", false, "Keep the last occurrence instead of the first")
 	dedupeCmd.Flags().BoolVar(&caseSensitiveDedupe, "case-sensitive", false, "Case sensitive comparison for key columns")
 
-	dedupeCmd.MarkFlagRequired("input")
-	dedupeCmd.MarkFlagRequired("output")
-	dedupeCmd.MarkFlagRequired("key")
+	_ = dedupeCmd.MarkFlagRequired("input")
+	_ = dedupeCmd.MarkFlagRequired("output")
+	_ = dedupeCmd.MarkFlagRequired("key")
 }

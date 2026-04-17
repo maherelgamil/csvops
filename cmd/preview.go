@@ -19,36 +19,30 @@ var (
 var previewCmd = &cobra.Command{
 	Use:   "preview",
 	Short: "Preview the first N rows of a CSV file",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		if previewInput == "" {
-			fmt.Println("❌ Please provide an input file using --input")
-			return
+			return fmt.Errorf("please provide an input file using --input")
 		}
 
 		file, err := os.Open(previewInput)
 		if err != nil {
-			fmt.Printf("❌ Failed to open file: %v\n", err)
-			return
+			return fmt.Errorf("failed to open file: %w", err)
 		}
 		defer file.Close()
 
 		reader := csv.NewReader(file)
-		headers := []string{}
-		rows := [][]string{}
-		count := 0
+		reader.FieldsPerRecord = -1
 
+		var headers []string
 		if !previewNoHeader {
 			headers, err = reader.Read()
 			if err != nil {
-				fmt.Printf("❌ Failed to read header: %v\n", err)
-				return
+				return fmt.Errorf("failed to read header: %w", err)
 			}
 		}
 
-		for {
-			if count >= previewRows {
-				break
-			}
+		rows := [][]string{}
+		for len(rows) < previewRows {
 			record, err := reader.Read()
 			if err == io.EOF {
 				break
@@ -58,12 +52,11 @@ var previewCmd = &cobra.Command{
 				continue
 			}
 			rows = append(rows, record)
-			count++
 		}
 
 		if len(rows) == 0 {
 			fmt.Println("⚠️  No data rows found")
-			return
+			return nil
 		}
 
 		table := tablewriter.NewWriter(os.Stdout)
@@ -75,13 +68,13 @@ var previewCmd = &cobra.Command{
 		if !previewNoHeader {
 			table.SetHeader(headers)
 		}
-
 		for _, row := range rows {
 			table.Append(row)
 		}
 
 		table.Render()
 		fmt.Printf("\n📄 Showing %d row(s) from '%s'\n", len(rows), previewInput)
+		return nil
 	},
 }
 
