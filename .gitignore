@@ -3,4 +3,9 @@
 *.csv
 /dist
 /csvops
+/desktop/build/bin
+/desktop/frontend/node_modules
+/desktop/frontend/dist
+/desktop/frontend/wailsjs
 *.db
+/desktop/csvops-desktop
