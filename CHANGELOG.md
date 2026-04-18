@@ -2,6 +2,22 @@
 
 All notable changes to this project are documented here.
 
+## [v0.4.0] - 2026-04-18
+
+### ✨ Features
+- **New library**: all CSV operations are now exposed as Go functions under `github.com/maherelgamil/csvops/pkg/csvops` — importable by other Go programs (including the upcoming desktop app). Each operation takes a typed `Options` struct and returns a typed `Result`.
+- Every operation supports `context.Context` cancellation and an optional `Progress` callback.
+- **`merge`** (library only): new `InputFiles` option for explicit-order merging, plus `SkipErrors` + `OnWarn` for per-file non-fatal errors.
+- **`to-sqlite`** (library only): typed `IfExistsAction` enum (`Replace`, `Skip`, `Append`, `Fail`); `ToSQLiteResult.Skipped` reflects honored `Skip` mode.
+- Test suite extended to ~35 tests in `pkg/csvops/`, including regression coverage for deterministic dedupe output order and the adversarial-table-name SQL-injection fix.
+
+### 🛠 Internal
+- CLI commands in `cmd/` are now thin wrappers over the library.
+- `io.Writer`-based output in `Filter` and `Merge` so callers can stream results to memory.
+
+### 🧩 Compatibility
+- CLI flags and behavior unchanged. No breaking changes for end users.
+
 ## [v0.3.0] - 2026-04-18
 
 ### 🔒 Security
