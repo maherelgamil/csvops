@@ -86,7 +86,8 @@ function suggestOutput(input: string, suffix: string, ext?: string) {
   return `${dir}${stem}.${suffix}${finalExt}`;
 }
 
-const PAGE_SIZE = 100;
+const PAGE_SIZE_OPTIONS = [50, 100, 250, 500, 1000];
+const DEFAULT_PAGE_SIZE = 100;
 
 // ---------- root -----------------------------------------------------------
 
@@ -96,6 +97,7 @@ export default function App() {
   const [info, setInfo] = useState<main.FileInfo | null>(null);
   const [page, setPage] = useState<main.PagePayload | null>(null);
   const [offset, setOffset] = useState(0);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [loadingFile, setLoadingFile] = useState(false);
   const [loadingPage, setLoadingPage] = useState(false);
   const [stats, setStats] = useState<main.StatsPayload | null>(null);
@@ -134,7 +136,7 @@ export default function App() {
       const i = await FileInfoCSV(path);
       setInfo(i);
       setOffset(0);
-      const p = await ReadPage(path, 0, PAGE_SIZE);
+      const p = await ReadPage(path, 0, pageSize);
       setPage(p);
     } finally {
       setLoadingFile(false);
@@ -146,16 +148,23 @@ export default function App() {
     if (p) await loadFile(p);
   }
 
-  async function gotoOffset(newOffset: number) {
+  async function gotoOffset(newOffset: number, size = pageSize) {
     if (!info) return;
     setLoadingPage(true);
     try {
-      const p = await ReadPage(info.path, Math.max(0, newOffset), PAGE_SIZE);
+      const p = await ReadPage(info.path, Math.max(0, newOffset), size);
       setPage(p);
       setOffset(p.offset);
     } finally {
       setLoadingPage(false);
     }
+  }
+
+  async function changePageSize(size: number) {
+    setPageSize(size);
+    // Snap to the page boundary that contains the current offset.
+    const newOffset = Math.floor(offset / size) * size;
+    await gotoOffset(newOffset, size);
   }
 
   async function loadStatsIfNeeded(): Promise<main.StatsPayload | null> {
@@ -180,9 +189,11 @@ export default function App() {
           <Toolbar
             info={info}
             offset={offset}
+            pageSize={pageSize}
+            onPageSize={changePageSize}
             page={page}
-            onPrev={() => gotoOffset(offset - PAGE_SIZE)}
-            onNext={() => gotoOffset(offset + PAGE_SIZE)}
+            onPrev={() => gotoOffset(offset - pageSize)}
+            onNext={() => gotoOffset(offset + pageSize)}
             onJump={(o) => gotoOffset(o)}
             onAction={setAction}
           />
@@ -288,9 +299,11 @@ function FileInfoBar({ info }: { info: main.FileInfo }) {
   );
 }
 
-function Toolbar({ info, offset, page, onPrev, onNext, onJump, onAction }: {
+function Toolbar({ info, offset, pageSize, onPageSize, page, onPrev, onNext, onJump, onAction }: {
   info: main.FileInfo;
   offset: number;
+  pageSize: number;
+  onPageSize: (n: number) => void;
   page: main.PagePayload | null;
   onPrev: () => void;
   onNext: () => void;
@@ -299,18 +312,18 @@ function Toolbar({ info, offset, page, onPrev, onNext, onJump, onAction }: {
 }) {
   const total = page?.totalRows ?? info.rows;
   const showingFrom = total === 0 ? 0 : offset + 1;
-  const showingTo = Math.min(offset + PAGE_SIZE, total);
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const currentPage = Math.floor(offset / PAGE_SIZE) + 1;
+  const showingTo = Math.min(offset + pageSize, total);
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const currentPage = Math.floor(offset / pageSize) + 1;
   const canPrev = offset > 0;
-  const canNext = offset + PAGE_SIZE < total;
+  const canNext = offset + pageSize < total;
 
   const [pageInput, setPageInput] = useState(String(currentPage));
   useEffect(() => setPageInput(String(currentPage)), [currentPage]);
 
   function jumpFromInput() {
     const n = Math.max(1, Math.min(totalPages, Number(pageInput) || 1));
-    onJump((n - 1) * PAGE_SIZE);
+    onJump((n - 1) * pageSize);
   }
 
   return (
@@ -339,6 +352,17 @@ function Toolbar({ info, offset, page, onPrev, onNext, onJump, onAction }: {
       </span>
 
       <div className="ml-auto flex items-center gap-2">
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <span>Per page</span>
+          <Select value={String(pageSize)} onValueChange={(v) => onPageSize(Number(v))}>
+            <SelectTrigger className="h-7 w-[78px]"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {PAGE_SIZE_OPTIONS.map((n) => (
+                <SelectItem key={n} value={String(n)}>{n}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button size="sm">
