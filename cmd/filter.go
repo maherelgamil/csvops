@@ -1,13 +1,11 @@
 package cmd
 
 import (
-	"encoding/csv"
+	"context"
 	"fmt"
-	"io"
 	"os"
-	"strconv"
-	"strings"
 
+	"github.com/maherelgamil/csvops/pkg/csvops"
 	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
 )
@@ -34,127 +32,53 @@ Use --all to require ALL provided conditions to match (AND).
 Flags --eq, --contains, --gt, --lt are only applied when explicitly set,
 so matching empty strings via --eq="" works correctly.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		eqSet := cmd.Flags().Changed("eq")
-		containsSet := cmd.Flags().Changed("contains")
-		gtSet := cmd.Flags().Changed("gt")
-		ltSet := cmd.Flags().Changed("lt")
-
-		if !eqSet && !containsSet && !gtSet && !ltSet {
-			return fmt.Errorf("at least one of --eq, --contains, --gt, --lt must be provided")
+		opts := csvops.FilterOptions{
+			Input:      filterInput,
+			Column:     filterColumn,
+			All:        filterMatchAll,
+			WithHeader: filterWithHeader,
+			Delimiter:  ',',
 		}
-
-		totalLines, err := countDataRows(filterInput, ',')
-		if err != nil {
-			return err
+		if cmd.Flags().Changed("eq") {
+			opts.Eq = &eqValue
 		}
-
-		file, err := os.Open(filterInput)
-		if err != nil {
-			return fmt.Errorf("failed to open input file: %w", err)
+		if cmd.Flags().Changed("contains") {
+			opts.Contains = &containsValue
 		}
-		defer file.Close()
-
-		reader := csv.NewReader(file)
-		headers, err := reader.Read()
-		if err != nil {
-			return fmt.Errorf("failed to read headers: %w", err)
+		if cmd.Flags().Changed("gt") {
+			opts.Gt = &gtValue
 		}
-
-		colIndex := -1
-		for i, col := range headers {
-			if col == filterColumn {
-				colIndex = i
-				break
-			}
-		}
-		if colIndex == -1 {
-			return fmt.Errorf("column %q not found", filterColumn)
+		if cmd.Flags().Changed("lt") {
+			opts.Lt = &ltValue
 		}
 
 		out := os.Stdout
 		if filterOutput != "" {
-			out, err = os.Create(filterOutput)
+			f, err := os.Create(filterOutput)
 			if err != nil {
-				return fmt.Errorf("failed to create output file: %w", err)
+				return fmt.Errorf("create output: %w", err)
 			}
-			defer out.Close()
+			defer f.Close()
+			out = f
+		}
+		opts.Output = out
+
+		var bar *progressbar.ProgressBar
+		opts.Progress = func(done, total int64) {
+			if bar == nil {
+				bar = progressbar.Default(total, "Filtering")
+			}
+			_ = bar.Set64(done)
 		}
 
-		writer := csv.NewWriter(out)
-		if filterWithHeader {
-			if err := writer.Write(headers); err != nil {
-				return fmt.Errorf("failed to write header: %w", err)
-			}
+		res, err := csvops.Filter(context.Background(), opts)
+		if err != nil {
+			return err
 		}
 
-		bar := progressbar.Default(totalLines, "Filtering")
-		matchCount := 0
-
-		for {
-			row, err := reader.Read()
-			if err == io.EOF {
-				break
-			}
-			if err != nil || len(row) <= colIndex {
-				_ = bar.Add(1)
-				continue
-			}
-
-			val := row[colIndex]
-			match := rowMatches(val, eqSet, containsSet, gtSet, ltSet, filterMatchAll)
-
-			if match {
-				if err := writer.Write(row); err != nil {
-					return fmt.Errorf("failed to write row: %w", err)
-				}
-				matchCount++
-			}
-			_ = bar.Add(1)
-		}
-
-		writer.Flush()
-		if err := writer.Error(); err != nil {
-			return fmt.Errorf("writer error: %w", err)
-		}
-
-		fmt.Fprintf(os.Stderr, "\n✅ Filter complete. %d rows matched out of %d total.\n", matchCount, totalLines)
+		fmt.Fprintf(os.Stderr, "\n✅ Filter complete. %d rows matched out of %d total.\n", res.Matched, res.TotalRows)
 		return nil
 	},
-}
-
-func rowMatches(val string, eqSet, containsSet, gtSet, ltSet, all bool) bool {
-	checks := []bool{}
-	if eqSet {
-		checks = append(checks, val == eqValue)
-	}
-	if containsSet {
-		checks = append(checks, strings.Contains(strings.ToLower(val), strings.ToLower(containsValue)))
-	}
-	if gtSet {
-		num, err := strconv.ParseFloat(val, 64)
-		checks = append(checks, err == nil && num > gtValue)
-	}
-	if ltSet {
-		num, err := strconv.ParseFloat(val, 64)
-		checks = append(checks, err == nil && num < ltValue)
-	}
-	if len(checks) == 0 {
-		return false
-	}
-	if all {
-		for _, c := range checks {
-			if !c {
-				return false
-			}
-		}
-		return true
-	}
-	for _, c := range checks {
-		if c {
-			return true
-		}
-	}
-	return false
 }
 
 func init() {
