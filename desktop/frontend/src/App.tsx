@@ -14,15 +14,42 @@ import {
 } from "../wailsjs/go/main/App";
 import { main } from "../wailsjs/go/models";
 import { EventsOn, EventsOff } from "../wailsjs/runtime/runtime";
-import "./App.css";
 
-type Tab = "preview" | "stats" | "filter" | "split" | "dedupe" | "merge" | "sqlite";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Progress } from "@/components/ui/progress";
+import {
+  FileText,
+  Folder,
+  Save,
+  Eye,
+  BarChart3,
+  Filter as FilterIcon,
+  Copy,
+  Scissors,
+  Combine,
+  Database,
+  CheckCircle2,
+  AlertCircle,
+  Loader2,
+  FolderOpen,
+} from "lucide-react";
 
 type ProgressEvent = { op: string; done: number; total: number };
 
 export default function App() {
-  const [path, setPath] = useState<string>("");
-  const [tab, setTab] = useState<Tab>("preview");
+  const [path, setPath] = useState("");
   const [progress, setProgress] = useState<ProgressEvent | null>(null);
 
   useEffect(() => {
@@ -35,42 +62,35 @@ export default function App() {
     if (p) setPath(p);
   }
 
-  // For tabs that don't need a single input file (merge), still allow opening one for context.
   return (
-    <div className="app">
-      <header>
-        <h1>csvops</h1>
-        <p className="tagline">CSV operations toolkit.</p>
-      </header>
+    <div className="flex h-screen flex-col bg-[hsl(210_40%_98%)]">
+      <Header path={path} onOpen={pickFile} />
 
-      <section className="toolbar">
-        <button onClick={pickFile}>📂 Open CSV…</button>
-        {path && (
-          <code className="path" title={path}>
-            {path}
-          </code>
+      <div className="flex-1 overflow-auto px-6 py-5">
+        {!path ? (
+          <EmptyState onOpen={pickFile} />
+        ) : (
+          <Tabs defaultValue="preview" className="w-full">
+            <TabsList className="mb-4">
+              <TabsTrigger value="preview"><Eye className="h-3.5 w-3.5" />Preview</TabsTrigger>
+              <TabsTrigger value="stats"><BarChart3 className="h-3.5 w-3.5" />Stats</TabsTrigger>
+              <TabsTrigger value="filter"><FilterIcon className="h-3.5 w-3.5" />Filter</TabsTrigger>
+              <TabsTrigger value="dedupe"><Copy className="h-3.5 w-3.5" />Dedupe</TabsTrigger>
+              <TabsTrigger value="split"><Scissors className="h-3.5 w-3.5" />Split</TabsTrigger>
+              <TabsTrigger value="merge"><Combine className="h-3.5 w-3.5" />Merge</TabsTrigger>
+              <TabsTrigger value="sqlite"><Database className="h-3.5 w-3.5" />SQLite</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="preview"><PreviewTab path={path} /></TabsContent>
+            <TabsContent value="stats"><StatsTab path={path} /></TabsContent>
+            <TabsContent value="filter"><FilterTab path={path} /></TabsContent>
+            <TabsContent value="dedupe"><DedupeTab path={path} /></TabsContent>
+            <TabsContent value="split"><SplitTab path={path} /></TabsContent>
+            <TabsContent value="merge"><MergeTab /></TabsContent>
+            <TabsContent value="sqlite"><SQLiteTab path={path} /></TabsContent>
+          </Tabs>
         )}
-      </section>
-
-      <nav className="tabs">
-        <TabButton id="preview" active={tab} onClick={setTab}>Preview</TabButton>
-        <TabButton id="stats" active={tab} onClick={setTab}>Stats</TabButton>
-        <TabButton id="filter" active={tab} onClick={setTab}>Filter</TabButton>
-        <TabButton id="dedupe" active={tab} onClick={setTab}>Dedupe</TabButton>
-        <TabButton id="split" active={tab} onClick={setTab}>Split</TabButton>
-        <TabButton id="merge" active={tab} onClick={setTab}>Merge</TabButton>
-        <TabButton id="sqlite" active={tab} onClick={setTab}>To SQLite</TabButton>
-      </nav>
-
-      <main className="tab-content">
-        {tab === "preview" && <PreviewTab path={path} />}
-        {tab === "stats" && <StatsTab path={path} />}
-        {tab === "filter" && <FilterTab path={path} />}
-        {tab === "dedupe" && <DedupeTab path={path} />}
-        {tab === "split" && <SplitTab path={path} />}
-        {tab === "merge" && <MergeTab />}
-        {tab === "sqlite" && <SQLiteTab path={path} />}
-      </main>
+      </div>
 
       {progress && progress.total > 0 && progress.done < progress.total && (
         <ProgressBar p={progress} />
@@ -79,43 +99,143 @@ export default function App() {
   );
 }
 
-function TabButton({ id, active, onClick, children }: {
-  id: Tab; active: Tab; onClick: (id: Tab) => void; children: React.ReactNode;
-}) {
+// ---------- Chrome --------------------------------------------------------
+
+function Header({ path, onOpen }: { path: string; onOpen: () => void }) {
   return (
-    <button
-      className={`tab ${active === id ? "tab-active" : ""}`}
-      onClick={() => onClick(id)}
-    >
-      {children}
-    </button>
+    <header className="flex items-center justify-between border-b border-border bg-card px-6 py-3">
+      <div className="flex items-center gap-3">
+        <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary text-primary-foreground">
+          <FileText className="h-4 w-4" />
+        </div>
+        <div>
+          <h1 className="text-sm font-semibold leading-none">csvops</h1>
+          <p className="mt-0.5 text-xs text-muted-foreground">CSV operations toolkit</p>
+        </div>
+      </div>
+      <div className="flex min-w-0 items-center gap-3">
+        {path && (
+          <code className="max-w-[480px] truncate rounded-md bg-secondary px-3 py-1.5 font-mono text-xs text-muted-foreground" title={path}>
+            {path}
+          </code>
+        )}
+        <Button onClick={onOpen} size="sm">
+          <FolderOpen className="h-4 w-4" />
+          {path ? "Change…" : "Open CSV…"}
+        </Button>
+      </div>
+    </header>
+  );
+}
+
+function EmptyState({ onOpen }: { onOpen: () => void }) {
+  return (
+    <div className="flex h-full items-center justify-center">
+      <Card className="w-[420px]">
+        <CardHeader className="items-center text-center">
+          <div className="mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-secondary">
+            <FileText className="h-6 w-6 text-muted-foreground" />
+          </div>
+          <CardTitle>Open a CSV file</CardTitle>
+          <CardDescription>Preview, analyze, and transform CSV data — all locally on your machine.</CardDescription>
+        </CardHeader>
+        <CardContent className="flex justify-center">
+          <Button onClick={onOpen}>
+            <FolderOpen className="h-4 w-4" />
+            Choose CSV file…
+          </Button>
+        </CardContent>
+      </Card>
+    </div>
   );
 }
 
 function ProgressBar({ p }: { p: ProgressEvent }) {
   const pct = p.total > 0 ? Math.round((p.done / p.total) * 100) : 0;
   return (
-    <div className="progress-wrap">
-      <div className="progress-label">
-        {p.op}: {p.done}/{p.total} ({pct}%)
+    <div className="border-t border-border bg-card px-6 py-2.5">
+      <div className="mb-1.5 flex items-center justify-between text-xs">
+        <span className="font-medium capitalize text-foreground">{p.op}</span>
+        <span className="text-muted-foreground">
+          {p.done.toLocaleString()} / {p.total.toLocaleString()} ({pct}%)
+        </span>
       </div>
-      <div className="progress-bar">
-        <div className="progress-fill" style={{ width: `${pct}%` }} />
+      <Progress value={pct} />
+    </div>
+  );
+}
+
+// ---------- Common UI -----------------------------------------------------
+
+function FormField({ label, children, hint }: {
+  label: string; children: React.ReactNode; hint?: string;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <Label>{label}</Label>
+      {children}
+      {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
+    </div>
+  );
+}
+
+function FilePicker({ label, value, onPick, icon: Icon }: {
+  label: string; value: string; onPick: () => void; icon?: any;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <Label>{label}</Label>
+      <div className="flex items-center gap-2">
+        <Button variant="outline" onClick={onPick} size="default">
+          {Icon ? <Icon className="h-4 w-4" /> : <Folder className="h-4 w-4" />}
+          Choose…
+        </Button>
+        {value ? (
+          <code className="flex-1 truncate rounded-md bg-secondary px-3 py-1.5 font-mono text-xs text-muted-foreground" title={value}>
+            {value}
+          </code>
+        ) : (
+          <span className="text-xs italic text-muted-foreground">No file selected</span>
+        )}
       </div>
     </div>
   );
 }
 
-function NeedFile() {
-  return <div className="empty-state">Open a CSV file first.</div>;
+function ResultBanner({ kind, children }: { kind: "success" | "error"; children: React.ReactNode }) {
+  const Icon = kind === "success" ? CheckCircle2 : AlertCircle;
+  const bg = kind === "success" ? "bg-success/10 border-success/30 text-success" : "bg-destructive/10 border-destructive/30 text-destructive";
+  return (
+    <div className={`flex items-start gap-3 rounded-lg border p-3 text-sm ${bg}`}>
+      <Icon className="mt-0.5 h-4 w-4 shrink-0" />
+      <div className="text-foreground">{children}</div>
+    </div>
+  );
 }
 
-function Error({ msg }: { msg: string }) {
-  return <div className="error">⚠️ {msg}</div>;
+function RunButton({ onClick, loading, disabled, children }: {
+  onClick: () => void; loading: boolean; disabled?: boolean; children: React.ReactNode;
+}) {
+  return (
+    <Button onClick={onClick} disabled={loading || disabled}>
+      {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+      {children}
+    </Button>
+  );
 }
 
-function Success({ children }: { children: React.ReactNode }) {
-  return <div className="success">✅ {children}</div>;
+function OpCard({ title, description, children }: {
+  title: string; description: string; children: React.ReactNode;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{title}</CardTitle>
+        <CardDescription>{description}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">{children}</CardContent>
+    </Card>
+  );
 }
 
 // ---------- Preview --------------------------------------------------------
@@ -126,8 +246,6 @@ function PreviewTab({ path }: { path: string }) {
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
 
-  if (!path) return <NeedFile />;
-
   async function run() {
     setLoading(true); setErr("");
     try { setData(await PreviewCSV(path, rows, false)); }
@@ -135,30 +253,23 @@ function PreviewTab({ path }: { path: string }) {
     finally { setLoading(false); }
   }
 
+  useEffect(() => { run(); /* eslint-disable-next-line */ }, [path]);
+
   return (
-    <div className="panel">
-      <div className="form-row">
-        <label>Rows:
-          <input type="number" min={1} max={1000} value={rows}
-            onChange={(e) => setRows(Number(e.target.value))} />
-        </label>
-        <button onClick={run} disabled={loading}>{loading ? "…" : "Preview"}</button>
-      </div>
-      {err && <Error msg={err} />}
-      {data && (
-        <div className="table-wrap">
-          <table>
-            <thead><tr>{data.headers.map((h, i) => <th key={i}>{h}</th>)}</tr></thead>
-            <tbody>
-              {data.rows.map((r, i) => (
-                <tr key={i}>{r.map((c, j) => <td key={j}>{c}</td>)}</tr>
-              ))}
-            </tbody>
-          </table>
-          <div className="meta">{data.rows.length} row(s)</div>
+    <OpCard title="Preview" description="Pretty-print the first N rows of the file.">
+      <div className="flex items-end gap-3">
+        <div className="w-32">
+          <FormField label="Rows">
+            <Input type="number" min={1} max={1000} value={rows} onChange={(e) => setRows(Number(e.target.value))} />
+          </FormField>
         </div>
+        <RunButton onClick={run} loading={loading}>Preview</RunButton>
+      </div>
+      {err && <ResultBanner kind="error">{err}</ResultBanner>}
+      {data && data.rows.length > 0 && (
+        <DataTable headers={data.headers} rows={data.rows} caption={`${data.rows.length} row(s)`} />
       )}
-    </div>
+    </OpCard>
   );
 }
 
@@ -170,8 +281,6 @@ function StatsTab({ path }: { path: string }) {
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
 
-  if (!path) return <NeedFile />;
-
   async function run() {
     setLoading(true); setErr("");
     try { setData(await StatsCSV(path, maxUnique)); }
@@ -180,36 +289,34 @@ function StatsTab({ path }: { path: string }) {
   }
 
   return (
-    <div className="panel">
-      <div className="form-row">
-        <label>Max unique tracked:
-          <input type="number" min={0} value={maxUnique}
-            onChange={(e) => setMaxUnique(Number(e.target.value))} />
-        </label>
-        <button onClick={run} disabled={loading}>{loading ? "Analyzing…" : "Analyze"}</button>
-      </div>
-      {err && <Error msg={err} />}
-      {data && (
-        <div className="table-wrap">
-          <div className="stats-summary">
-            Total rows: <strong>{data.totalRows}</strong> · Columns: <strong>{data.columns.length}</strong>
-          </div>
-          <table>
-            <thead><tr><th>Column</th><th>Unique</th><th>Empty</th><th>Top 3</th></tr></thead>
-            <tbody>
-              {data.columns.map((c, i) => (
-                <tr key={i}>
-                  <td>{c.name}</td>
-                  <td>{c.uniqueCapped ? `≥${c.unique} (capped)` : c.unique}</td>
-                  <td>{c.empty}</td>
-                  <td>{c.top.map((t) => `${t.value} (${t.count})`).join(", ")}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+    <OpCard title="Stats" description="Per-column unique values, empty cells, and top values.">
+      <div className="flex items-end gap-3">
+        <div className="w-48">
+          <FormField label="Max unique tracked" hint="Caps memory on high-cardinality columns.">
+            <Input type="number" min={0} value={maxUnique} onChange={(e) => setMaxUnique(Number(e.target.value))} />
+          </FormField>
         </div>
+        <RunButton onClick={run} loading={loading}>Analyze</RunButton>
+      </div>
+      {err && <ResultBanner kind="error">{err}</ResultBanner>}
+      {data && (
+        <>
+          <div className="flex gap-6 text-sm text-muted-foreground">
+            <span>Total rows: <strong className="text-foreground">{data.totalRows.toLocaleString()}</strong></span>
+            <span>Columns: <strong className="text-foreground">{data.columns.length}</strong></span>
+          </div>
+          <DataTable
+            headers={["Column", "Unique", "Empty", "Top 3"]}
+            rows={data.columns.map((c) => [
+              c.name,
+              c.uniqueCapped ? `≥${c.unique} (capped)` : String(c.unique),
+              String(c.empty),
+              c.top.map((t) => `${t.value} (${t.count})`).join(", "),
+            ])}
+          />
+        </>
       )}
-    </div>
+    </OpCard>
   );
 }
 
@@ -231,15 +338,9 @@ function FilterTab({ path }: { path: string }) {
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
 
-  if (!path) return <NeedFile />;
-
-  async function pickOutput() {
-    const p = await SaveCSVFile("filtered.csv");
-    if (p) setOutput(p);
-  }
-
+  async function pickOutput() { const p = await SaveCSVFile("filtered.csv"); if (p) setOutput(p); }
   async function run() {
-    if (!output) { setErr("Pick an output file first."); return; }
+    if (!output) { setErr("Choose an output file first."); return; }
     setLoading(true); setErr("");
     try {
       setResult(await FilterCSV({
@@ -252,46 +353,55 @@ function FilterTab({ path }: { path: string }) {
   }
 
   return (
-    <div className="panel">
-      <div className="form-grid">
-        <label>Column
-          <input type="text" value={column} onChange={(e) => setColumn(e.target.value)} placeholder="e.g. country" />
-        </label>
-        <label className="condition">
-          <input type="checkbox" checked={eqSet} onChange={(e) => setEqSet(e.target.checked)} />
-          equals <input type="text" value={eq} disabled={!eqSet} onChange={(e) => setEq(e.target.value)} />
-        </label>
-        <label className="condition">
-          <input type="checkbox" checked={containsSet} onChange={(e) => setContainsSet(e.target.checked)} />
-          contains <input type="text" value={contains} disabled={!containsSet} onChange={(e) => setContains(e.target.value)} />
-        </label>
-        <label className="condition">
-          <input type="checkbox" checked={gtSet} onChange={(e) => setGtSet(e.target.checked)} />
-          &gt; <input type="number" value={gt} disabled={!gtSet} onChange={(e) => setGt(Number(e.target.value))} />
-        </label>
-        <label className="condition">
-          <input type="checkbox" checked={ltSet} onChange={(e) => setLtSet(e.target.checked)} />
-          &lt; <input type="number" value={lt} disabled={!ltSet} onChange={(e) => setLt(Number(e.target.value))} />
-        </label>
-        <label>
-          <input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} />
-          Match ALL conditions (AND)
+    <OpCard title="Filter" description="Keep only rows matching one or more conditions.">
+      <FormField label="Column">
+        <Input value={column} onChange={(e) => setColumn(e.target.value)} placeholder="e.g. country" />
+      </FormField>
+
+      <div className="space-y-2">
+        <Label>Conditions</Label>
+        <ConditionRow checked={eqSet} onCheck={setEqSet} label="equals">
+          <Input value={eq} disabled={!eqSet} onChange={(e) => setEq(e.target.value)} placeholder="value" />
+        </ConditionRow>
+        <ConditionRow checked={containsSet} onCheck={setContainsSet} label="contains">
+          <Input value={contains} disabled={!containsSet} onChange={(e) => setContains(e.target.value)} placeholder="substring" />
+        </ConditionRow>
+        <ConditionRow checked={gtSet} onCheck={setGtSet} label="greater than">
+          <Input type="number" value={gt} disabled={!gtSet} onChange={(e) => setGt(Number(e.target.value))} />
+        </ConditionRow>
+        <ConditionRow checked={ltSet} onCheck={setLtSet} label="less than">
+          <Input type="number" value={lt} disabled={!ltSet} onChange={(e) => setLt(Number(e.target.value))} />
+        </ConditionRow>
+
+        <label className="flex cursor-pointer items-center gap-2 pt-2 text-sm">
+          <Checkbox checked={all} onCheckedChange={(v) => setAll(!!v)} />
+          Match <strong>ALL</strong> conditions (AND), not ANY (OR)
         </label>
       </div>
-      <div className="form-row">
-        <button onClick={pickOutput}>💾 Output file…</button>
-        {output && <code className="path" title={output}>{output}</code>}
-      </div>
-      <div className="form-row">
-        <button onClick={run} disabled={loading || !column}>{loading ? "Filtering…" : "Run filter"}</button>
-      </div>
-      {err && <Error msg={err} />}
+
+      <FilePicker label="Output file" value={output} onPick={pickOutput} icon={Save} />
+
+      <RunButton onClick={run} loading={loading} disabled={!column}>Run filter</RunButton>
+
+      {err && <ResultBanner kind="error">{err}</ResultBanner>}
       {result && (
-        <Success>
-          Matched <strong>{result.matched}</strong> of <strong>{result.totalRows}</strong> rows.
-          Written to <code>{output}</code>.
-        </Success>
+        <ResultBanner kind="success">
+          Matched <strong>{result.matched.toLocaleString()}</strong> of{" "}
+          <strong>{result.totalRows.toLocaleString()}</strong> rows. Written to <code>{output}</code>.
+        </ResultBanner>
       )}
+    </OpCard>
+  );
+}
+
+function ConditionRow({ checked, onCheck, label, children }: {
+  checked: boolean; onCheck: (v: boolean) => void; label: string; children: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-center gap-3 rounded-md border border-border bg-card p-2.5">
+      <Checkbox checked={checked} onCheckedChange={(v) => onCheck(!!v)} />
+      <span className="w-28 text-sm text-foreground">{label}</span>
+      <div className="flex-1">{children}</div>
     </div>
   );
 }
@@ -307,56 +417,42 @@ function DedupeTab({ path }: { path: string }) {
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
 
-  if (!path) return <NeedFile />;
-
-  async function pickOutput() {
-    const p = await SaveCSVFile("dedup.csv");
-    if (p) setOutput(p);
-  }
-
+  async function pickOutput() { const p = await SaveCSVFile("dedup.csv"); if (p) setOutput(p); }
   async function run() {
-    if (!output) { setErr("Pick an output file first."); return; }
+    if (!output) { setErr("Choose an output file first."); return; }
     if (!keys.trim()) { setErr("Enter at least one key column."); return; }
     setLoading(true); setErr("");
-    try {
-      setResult(await DedupeCSV({
-        input: path, output, keyColumns: keys,
-        keepLast, caseSensitive,
-      } as any));
-    } catch (e: any) { setErr(String(e)); }
+    try { setResult(await DedupeCSV({ input: path, output, keyColumns: keys, keepLast, caseSensitive } as any)); }
+    catch (e: any) { setErr(String(e)); }
     finally { setLoading(false); }
   }
 
   return (
-    <div className="panel">
-      <div className="form-grid">
-        <label>Key column(s) — comma-separated
-          <input type="text" value={keys} onChange={(e) => setKeys(e.target.value)} placeholder="e.g. email or first,last" />
-        </label>
-        <label>
-          <input type="checkbox" checked={keepLast} onChange={(e) => setKeepLast(e.target.checked)} />
+    <OpCard title="Dedupe" description="Remove duplicate rows by one or more key columns. Output preserves original file order.">
+      <FormField label="Key columns" hint="Comma-separated, e.g. email or first,last">
+        <Input value={keys} onChange={(e) => setKeys(e.target.value)} placeholder="email" />
+      </FormField>
+      <div className="flex flex-wrap gap-5">
+        <label className="flex cursor-pointer items-center gap-2 text-sm">
+          <Checkbox checked={keepLast} onCheckedChange={(v) => setKeepLast(!!v)} />
           Keep last occurrence (default keeps first)
         </label>
-        <label>
-          <input type="checkbox" checked={caseSensitive} onChange={(e) => setCaseSensitive(e.target.checked)} />
-          Case-sensitive comparison
+        <label className="flex cursor-pointer items-center gap-2 text-sm">
+          <Checkbox checked={caseSensitive} onCheckedChange={(v) => setCaseSensitive(!!v)} />
+          Case-sensitive
         </label>
       </div>
-      <div className="form-row">
-        <button onClick={pickOutput}>💾 Output file…</button>
-        {output && <code className="path" title={output}>{output}</code>}
-      </div>
-      <div className="form-row">
-        <button onClick={run} disabled={loading}>{loading ? "Deduplicating…" : "Run dedupe"}</button>
-      </div>
-      {err && <Error msg={err} />}
+      <FilePicker label="Output file" value={output} onPick={pickOutput} icon={Save} />
+      <RunButton onClick={run} loading={loading}>Run dedupe</RunButton>
+      {err && <ResultBanner kind="error">{err}</ResultBanner>}
       {result && (
-        <Success>
-          {result.uniqueRows} unique row(s) kept · {result.duplicates} duplicates removed
-          (total: {result.totalRows}). Written to <code>{output}</code>.
-        </Success>
+        <ResultBanner kind="success">
+          Kept <strong>{result.uniqueRows.toLocaleString()}</strong> unique row(s),
+          removed <strong>{result.duplicates.toLocaleString()}</strong> duplicates from{" "}
+          <strong>{result.totalRows.toLocaleString()}</strong> total. Written to <code>{output}</code>.
+        </ResultBanner>
       )}
-    </div>
+    </OpCard>
   );
 }
 
@@ -370,50 +466,38 @@ function SplitTab({ path }: { path: string }) {
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
 
-  if (!path) return <NeedFile />;
-
-  async function pickOutDir() {
-    const p = await OpenDirectory("Select output directory");
-    if (p) setOutDir(p);
-  }
-
+  async function pickOutDir() { const p = await OpenDirectory("Select output directory"); if (p) setOutDir(p); }
   async function run() {
-    if (!outDir) { setErr("Pick an output directory first."); return; }
+    if (!outDir) { setErr("Choose an output directory first."); return; }
     setLoading(true); setErr("");
-    try {
-      setResult(await SplitCSV({
-        input: path, outputDir: outDir,
-        rowsPerFile, withHeader,
-      } as any));
-    } catch (e: any) { setErr(String(e)); }
+    try { setResult(await SplitCSV({ input: path, outputDir: outDir, rowsPerFile, withHeader } as any)); }
+    catch (e: any) { setErr(String(e)); }
     finally { setLoading(false); }
   }
 
   return (
-    <div className="panel">
-      <div className="form-grid">
-        <label>Rows per output file
-          <input type="number" min={1} value={rowsPerFile} onChange={(e) => setRowsPerFile(Number(e.target.value))} />
-        </label>
-        <label>
-          <input type="checkbox" checked={withHeader} onChange={(e) => setWithHeader(e.target.checked)} />
-          Include header in each chunk
-        </label>
+    <OpCard title="Split" description="Break a large CSV into chunks of N rows each.">
+      <div className="grid grid-cols-2 gap-4">
+        <FormField label="Rows per output file">
+          <Input type="number" min={1} value={rowsPerFile} onChange={(e) => setRowsPerFile(Number(e.target.value))} />
+        </FormField>
+        <div className="flex items-end">
+          <label className="flex cursor-pointer items-center gap-2 text-sm">
+            <Checkbox checked={withHeader} onCheckedChange={(v) => setWithHeader(!!v)} />
+            Include header in each chunk
+          </label>
+        </div>
       </div>
-      <div className="form-row">
-        <button onClick={pickOutDir}>📁 Output directory…</button>
-        {outDir && <code className="path" title={outDir}>{outDir}</code>}
-      </div>
-      <div className="form-row">
-        <button onClick={run} disabled={loading}>{loading ? "Splitting…" : "Run split"}</button>
-      </div>
-      {err && <Error msg={err} />}
+      <FilePicker label="Output directory" value={outDir} onPick={pickOutDir} icon={Folder} />
+      <RunButton onClick={run} loading={loading}>Run split</RunButton>
+      {err && <ResultBanner kind="error">{err}</ResultBanner>}
       {result && (
-        <Success>
-          Wrote {result.filesCreated} file(s) totaling {result.rowsProcessed} row(s) into <code>{outDir}</code>.
-        </Success>
+        <ResultBanner kind="success">
+          Wrote <strong>{result.filesCreated}</strong> file(s),{" "}
+          <strong>{result.rowsProcessed.toLocaleString()}</strong> row(s) total, into <code>{outDir}</code>.
+        </ResultBanner>
       )}
-    </div>
+    </OpCard>
   );
 }
 
@@ -427,51 +511,34 @@ function MergeTab() {
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
 
-  async function pickInDir() {
-    const p = await OpenDirectory("Select directory of CSV files to merge");
-    if (p) setInDir(p);
-  }
-  async function pickOutput() {
-    const p = await SaveCSVFile("merged.csv");
-    if (p) setOutput(p);
-  }
-
+  async function pickInDir() { const p = await OpenDirectory("Select directory of CSV files"); if (p) setInDir(p); }
+  async function pickOutput() { const p = await SaveCSVFile("merged.csv"); if (p) setOutput(p); }
   async function run() {
-    if (!inDir) { setErr("Pick an input directory."); return; }
-    if (!output) { setErr("Pick an output file."); return; }
+    if (!inDir) { setErr("Choose an input directory."); return; }
+    if (!output) { setErr("Choose an output file."); return; }
     setLoading(true); setErr("");
-    try {
-      setResult(await MergeCSV({ inputDir: inDir, output, withHeader } as any));
-    } catch (e: any) { setErr(String(e)); }
+    try { setResult(await MergeCSV({ inputDir: inDir, output, withHeader } as any)); }
+    catch (e: any) { setErr(String(e)); }
     finally { setLoading(false); }
   }
 
   return (
-    <div className="panel">
-      <div className="form-row">
-        <button onClick={pickInDir}>📁 Input directory…</button>
-        {inDir && <code className="path" title={inDir}>{inDir}</code>}
-      </div>
-      <div className="form-row">
-        <button onClick={pickOutput}>💾 Output file…</button>
-        {output && <code className="path" title={output}>{output}</code>}
-      </div>
-      <div className="form-row">
-        <label>
-          <input type="checkbox" checked={withHeader} onChange={(e) => setWithHeader(e.target.checked)} />
-          Use header from first file
-        </label>
-      </div>
-      <div className="form-row">
-        <button onClick={run} disabled={loading}>{loading ? "Merging…" : "Run merge"}</button>
-      </div>
-      {err && <Error msg={err} />}
+    <OpCard title="Merge" description="Combine all CSV files in a directory into one output file.">
+      <FilePicker label="Input directory" value={inDir} onPick={pickInDir} icon={Folder} />
+      <FilePicker label="Output file" value={output} onPick={pickOutput} icon={Save} />
+      <label className="flex cursor-pointer items-center gap-2 text-sm">
+        <Checkbox checked={withHeader} onCheckedChange={(v) => setWithHeader(!!v)} />
+        Use header from the first file
+      </label>
+      <RunButton onClick={run} loading={loading}>Run merge</RunButton>
+      {err && <ResultBanner kind="error">{err}</ResultBanner>}
       {result && (
-        <Success>
-          Merged {result.filesProcessed} file(s) — {result.rowsWritten} row(s) → <code>{output}</code>.
-        </Success>
+        <ResultBanner kind="success">
+          Merged <strong>{result.filesProcessed}</strong> file(s),{" "}
+          <strong>{result.rowsWritten.toLocaleString()}</strong> row(s) → <code>{output}</code>.
+        </ResultBanner>
       )}
-    </div>
+    </OpCard>
   );
 }
 
@@ -485,54 +552,82 @@ function SQLiteTab({ path }: { path: string }) {
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
 
-  if (!path) return <NeedFile />;
-
-  async function pickDB() {
-    const p = await SaveDBFile("data.db");
-    if (p) setDbPath(p);
-  }
-
+  async function pickDB() { const p = await SaveDBFile("data.db"); if (p) setDbPath(p); }
   async function run() {
-    if (!dbPath) { setErr("Pick an output .db file first."); return; }
+    if (!dbPath) { setErr("Choose an output .db file first."); return; }
     setLoading(true); setErr("");
-    try {
-      setResult(await ToSQLiteCSV({
-        input: path, dbPath, table, ifExists,
-      } as any));
-    } catch (e: any) { setErr(String(e)); }
+    try { setResult(await ToSQLiteCSV({ input: path, dbPath, table, ifExists } as any)); }
+    catch (e: any) { setErr(String(e)); }
     finally { setLoading(false); }
   }
 
   return (
-    <div className="panel">
-      <div className="form-grid">
-        <label>Table name (default: filename)
-          <input type="text" value={table} onChange={(e) => setTable(e.target.value)} placeholder="e.g. users" />
-        </label>
-        <label>If table exists
-          <select value={ifExists} onChange={(e) => setIfExists(e.target.value)}>
-            <option value="replace">replace</option>
-            <option value="append">append</option>
-            <option value="skip">skip</option>
-            <option value="fail">fail</option>
-          </select>
-        </label>
+    <OpCard title="To SQLite" description="Import the CSV into a SQLite database table (all columns as TEXT).">
+      <div className="grid grid-cols-2 gap-4">
+        <FormField label="Table name" hint="Defaults to the input filename.">
+          <Input value={table} onChange={(e) => setTable(e.target.value)} placeholder="users" />
+        </FormField>
+        <FormField label="If table exists">
+          <Select value={ifExists} onValueChange={setIfExists}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="replace">replace — drop and re-create</SelectItem>
+              <SelectItem value="append">append — add rows to existing</SelectItem>
+              <SelectItem value="skip">skip — do nothing if exists</SelectItem>
+              <SelectItem value="fail">fail — error if exists</SelectItem>
+            </SelectContent>
+          </Select>
+        </FormField>
       </div>
-      <div className="form-row">
-        <button onClick={pickDB}>💾 Output .db…</button>
-        {dbPath && <code className="path" title={dbPath}>{dbPath}</code>}
-      </div>
-      <div className="form-row">
-        <button onClick={run} disabled={loading}>{loading ? "Importing…" : "Run import"}</button>
-      </div>
-      {err && <Error msg={err} />}
-      {result && result.skipped && (
-        <Success>Table <code>{result.table}</code> already exists — skipped.</Success>
+      <FilePicker label="Output database (.db)" value={dbPath} onPick={pickDB} icon={Database} />
+      <RunButton onClick={run} loading={loading}>Run import</RunButton>
+      {err && <ResultBanner kind="error">{err}</ResultBanner>}
+      {result?.skipped && (
+        <ResultBanner kind="success">Table <code>{result.table}</code> already exists — skipped.</ResultBanner>
       )}
       {result && !result.skipped && (
-        <Success>
-          Imported {result.rowsImported} row(s) into table <code>{result.table}</code> at <code>{dbPath}</code>.
-        </Success>
+        <ResultBanner kind="success">
+          Imported <strong>{result.rowsImported.toLocaleString()}</strong> row(s) into table{" "}
+          <code>{result.table}</code> at <code>{dbPath}</code>.
+        </ResultBanner>
+      )}
+    </OpCard>
+  );
+}
+
+// ---------- Data table ----------------------------------------------------
+
+function DataTable({ headers, rows, caption }: {
+  headers: string[]; rows: string[][]; caption?: string;
+}) {
+  return (
+    <div className="overflow-hidden rounded-lg border border-border">
+      <div className="max-h-[420px] overflow-auto">
+        <table className="w-full text-sm">
+          <thead className="sticky top-0 z-10 bg-secondary">
+            <tr>
+              {headers.map((h, i) => (
+                <th key={i} className="border-b border-border px-3 py-2 text-left font-semibold text-foreground">
+                  {h}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i} className="border-b border-border last:border-0 hover:bg-secondary/60">
+                {r.map((c, j) => (
+                  <td key={j} className="px-3 py-2 font-mono text-xs text-foreground">{c}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {caption && (
+        <div className="border-t border-border bg-secondary/50 px-3 py-1.5 text-xs text-muted-foreground">
+          {caption}
+        </div>
       )}
     </div>
   );
