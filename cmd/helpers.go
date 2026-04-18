@@ -1,11 +1,10 @@
 package cmd
 
 import (
-	"encoding/csv"
 	"fmt"
-	"io"
-	"os"
 	"unicode/utf8"
+
+	"github.com/maherelgamil/csvops/pkg/csvops"
 )
 
 // parseDelimiter validates that the delimiter string is exactly one rune
@@ -24,32 +23,7 @@ func parseDelimiter(s string) (rune, error) {
 	return r, nil
 }
 
-// countDataRows counts the number of non-header data rows in a CSV file.
-// Returns 0 if the file is empty.
+// countDataRows delegates to the library implementation.
 func countDataRows(path string, delim rune) (int64, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return 0, fmt.Errorf("failed to open file for counting: %w", err)
-	}
-	defer f.Close()
-
-	r := csv.NewReader(f)
-	r.Comma = delim
-	r.FieldsPerRecord = -1
-
-	var total int64
-	for {
-		_, err := r.Read()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			continue
-		}
-		total++
-	}
-	if total > 0 {
-		total-- // exclude header
-	}
-	return total, nil
+	return csvops.CountDataRows(path, delim)
 }
