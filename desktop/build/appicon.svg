@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3b82f6"/>
+      <stop offset="1" stop-color="#1d4ed8"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="18" flood-color="#000" flood-opacity="0.18"/>
+    </filter>
+  </defs>
+
+  <!-- Rounded-square background -->
+  <rect x="0" y="0" width="1024" height="1024" rx="224" ry="224" fill="url(#bg)"/>
+
+  <!-- Subtle inner highlight at top -->
+  <rect x="0" y="0" width="1024" height="512" rx="224" ry="224" fill="white" opacity="0.06"/>
+
+  <!-- Document body -->
+  <g filter="url(#shadow)">
+    <rect x="232" y="208" width="560" height="608" rx="48" ry="48" fill="white"/>
+  </g>
+
+  <!-- Folded corner -->
+  <path d="M 712 208 L 792 288 L 712 288 Z" fill="#dbeafe"/>
+
+  <!-- Header row (highlighted) -->
+  <rect x="280" y="296" width="464" height="52" rx="10" ry="10" fill="#3b82f6" opacity="0.12"/>
+
+  <!-- Vertical column dividers (3 columns) -->
+  <line x1="436" y1="296" x2="436" y2="744" stroke="#cbd5e1" stroke-width="3"/>
+  <line x1="588" y1="296" x2="588" y2="744" stroke="#cbd5e1" stroke-width="3"/>
+
+  <!-- Horizontal row dividers -->
+  <line x1="280" y1="348" x2="744" y2="348" stroke="#cbd5e1" stroke-width="3"/>
+  <line x1="280" y1="416" x2="744" y2="416" stroke="#e2e8f0" stroke-width="3"/>
+  <line x1="280" y1="484" x2="744" y2="484" stroke="#e2e8f0" stroke-width="3"/>
+  <line x1="280" y1="552" x2="744" y2="552" stroke="#e2e8f0" stroke-width="3"/>
+  <line x1="280" y1="620" x2="744" y2="620" stroke="#e2e8f0" stroke-width="3"/>
+  <line x1="280" y1="688" x2="744" y2="688" stroke="#e2e8f0" stroke-width="3"/>
+
+  <!-- Header labels (placeholder bars) -->
+  <rect x="316" y="312" width="80" height="22" rx="6" fill="#1d4ed8"/>
+  <rect x="468" y="312" width="80" height="22" rx="6" fill="#1d4ed8"/>
+  <rect x="620" y="312" width="80" height="22" rx="6" fill="#1d4ed8"/>
+
+  <!-- "csv" wordmark -->
+  <text x="512" y="912"
+        text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Helvetica Neue', sans-serif"
+        font-weight="800"
+        font-size="120"
+        fill="white"
+        letter-spacing="6">csv</text>
+</svg>
