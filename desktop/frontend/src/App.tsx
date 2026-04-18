@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   OpenCSVFile,
   OpenDirectory,
@@ -11,6 +11,8 @@ import {
   DedupeCSV,
   MergeCSV,
   ToSQLiteCSV,
+  FileInfoCSV,
+  RevealFile,
 } from "../wailsjs/go/main/App";
 import { main } from "../wailsjs/go/models";
 import { EventsOn, EventsOff } from "../wailsjs/runtime/runtime";
@@ -18,7 +20,13 @@ import { EventsOn, EventsOff } from "../wailsjs/runtime/runtime";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+} from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -44,30 +52,98 @@ import {
   AlertCircle,
   Loader2,
   FolderOpen,
+  ExternalLink,
+  Hash,
+  HardDrive,
+  Upload,
 } from "lucide-react";
+
+// ---------- helpers --------------------------------------------------------
 
 type ProgressEvent = { op: string; done: number; total: number };
 
+function formatBytes(b: number): string {
+  if (b < 1024) return `${b} B`;
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
+  if (b < 1024 * 1024 * 1024) return `${(b / 1024 / 1024).toFixed(1)} MB`;
+  return `${(b / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
+/** Suggest a sibling output path by inserting `.suffix` before the extension. */
+function suggestOutput(input: string, suffix: string, newExt?: string): string {
+  if (!input) return "";
+  const sep = input.includes("\\") ? "\\" : "/";
+  const i = input.lastIndexOf(sep);
+  const dir = i >= 0 ? input.slice(0, i + 1) : "";
+  const name = i >= 0 ? input.slice(i + 1) : input;
+  const dot = name.lastIndexOf(".");
+  const stem = dot > 0 ? name.slice(0, dot) : name;
+  const ext = newExt ?? (dot > 0 ? name.slice(dot) : ".csv");
+  return `${dir}${stem}.${suffix}${ext}`;
+}
+
+// ---------- root -----------------------------------------------------------
+
 export default function App() {
-  const [path, setPath] = useState("");
+  const [info, setInfo] = useState<main.FileInfo | null>(null);
+  const [loadingFile, setLoadingFile] = useState(false);
   const [progress, setProgress] = useState<ProgressEvent | null>(null);
+  const [dragging, setDragging] = useState(false);
 
   useEffect(() => {
     EventsOn("progress", (p: ProgressEvent) => setProgress(p));
-    return () => EventsOff("progress");
+    EventsOn("file-dropped", (path: string) => loadFile(path));
+    return () => {
+      EventsOff("progress");
+      EventsOff("file-dropped");
+    };
   }, []);
+
+  // Native HTML drag/drop also works because Wails enables file drop.
+  useEffect(() => {
+    const onDragOver = (e: DragEvent) => {
+      e.preventDefault();
+      setDragging(true);
+    };
+    const onDragLeave = (e: DragEvent) => {
+      if (e.target === document.documentElement) setDragging(false);
+    };
+    const onDrop = () => setDragging(false);
+    window.addEventListener("dragover", onDragOver);
+    window.addEventListener("dragleave", onDragLeave);
+    window.addEventListener("drop", onDrop);
+    return () => {
+      window.removeEventListener("dragover", onDragOver);
+      window.removeEventListener("dragleave", onDragLeave);
+      window.removeEventListener("drop", onDrop);
+    };
+  }, []);
+
+  async function loadFile(path: string) {
+    if (!path) return;
+    setLoadingFile(true);
+    try {
+      const i = await FileInfoCSV(path);
+      setInfo(i);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoadingFile(false);
+    }
+  }
 
   async function pickFile() {
     const p = await OpenCSVFile();
-    if (p) setPath(p);
+    if (p) await loadFile(p);
   }
 
   return (
-    <div className="flex h-screen flex-col bg-[hsl(210_40%_98%)]">
-      <Header path={path} onOpen={pickFile} />
+    <div className="relative flex h-screen flex-col bg-[hsl(210_40%_98%)]">
+      <Header info={info} onOpen={pickFile} loading={loadingFile} />
+      {info && <FileInfoBar info={info} />}
 
       <div className="flex-1 overflow-auto px-6 py-5">
-        {!path ? (
+        {!info ? (
           <EmptyState onOpen={pickFile} />
         ) : (
           <Tabs defaultValue="preview" className="w-full">
@@ -81,13 +157,13 @@ export default function App() {
               <TabsTrigger value="sqlite"><Database className="h-3.5 w-3.5" />SQLite</TabsTrigger>
             </TabsList>
 
-            <TabsContent value="preview"><PreviewTab path={path} /></TabsContent>
-            <TabsContent value="stats"><StatsTab path={path} /></TabsContent>
-            <TabsContent value="filter"><FilterTab path={path} /></TabsContent>
-            <TabsContent value="dedupe"><DedupeTab path={path} /></TabsContent>
-            <TabsContent value="split"><SplitTab path={path} /></TabsContent>
+            <TabsContent value="preview"><PreviewTab info={info} /></TabsContent>
+            <TabsContent value="stats"><StatsTab path={info.path} /></TabsContent>
+            <TabsContent value="filter"><FilterTab info={info} /></TabsContent>
+            <TabsContent value="dedupe"><DedupeTab info={info} /></TabsContent>
+            <TabsContent value="split"><SplitTab path={info.path} /></TabsContent>
             <TabsContent value="merge"><MergeTab /></TabsContent>
-            <TabsContent value="sqlite"><SQLiteTab path={path} /></TabsContent>
+            <TabsContent value="sqlite"><SQLiteTab info={info} /></TabsContent>
           </Tabs>
         )}
       </div>
@@ -95,13 +171,15 @@ export default function App() {
       {progress && progress.total > 0 && progress.done < progress.total && (
         <ProgressBar p={progress} />
       )}
+
+      {dragging && <DropOverlay />}
     </div>
   );
 }
 
 // ---------- Chrome --------------------------------------------------------
 
-function Header({ path, onOpen }: { path: string; onOpen: () => void }) {
+function Header({ info, onOpen, loading }: { info: main.FileInfo | null; onOpen: () => void; loading: boolean }) {
   return (
     <header className="flex items-center justify-between border-b border-border bg-card px-6 py-3">
       <div className="flex items-center gap-3">
@@ -113,31 +191,66 @@ function Header({ path, onOpen }: { path: string; onOpen: () => void }) {
           <p className="mt-0.5 text-xs text-muted-foreground">CSV operations toolkit</p>
         </div>
       </div>
-      <div className="flex min-w-0 items-center gap-3">
-        {path && (
-          <code className="max-w-[480px] truncate rounded-md bg-secondary px-3 py-1.5 font-mono text-xs text-muted-foreground" title={path}>
-            {path}
-          </code>
-        )}
-        <Button onClick={onOpen} size="sm">
-          <FolderOpen className="h-4 w-4" />
-          {path ? "Change…" : "Open CSV…"}
-        </Button>
-      </div>
+      <Button onClick={onOpen} size="sm" disabled={loading}>
+        {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <FolderOpen className="h-4 w-4" />}
+        {info ? "Change file…" : "Open CSV…"}
+      </Button>
     </header>
+  );
+}
+
+function FileInfoBar({ info }: { info: main.FileInfo }) {
+  return (
+    <div className="flex items-center gap-5 border-b border-border bg-secondary/40 px-6 py-2 text-xs">
+      <code
+        className="max-w-[420px] truncate font-mono text-muted-foreground"
+        title={info.path}
+      >
+        {info.path}
+      </code>
+      <span className="flex items-center gap-1.5 text-muted-foreground">
+        <Hash className="h-3 w-3" />
+        <strong className="font-semibold text-foreground">
+          {info.rows.toLocaleString()}
+        </strong>{" "}
+        rows
+      </span>
+      <span className="flex items-center gap-1.5 text-muted-foreground">
+        <HardDrive className="h-3 w-3" />
+        <strong className="font-semibold text-foreground">
+          {formatBytes(info.size)}
+        </strong>
+      </span>
+      <span className="flex items-center gap-1.5 text-muted-foreground">
+        <BarChart3 className="h-3 w-3" />
+        <strong className="font-semibold text-foreground">
+          {(info.headers || []).length}
+        </strong>{" "}
+        columns
+      </span>
+      <button
+        onClick={() => RevealFile(info.path)}
+        className="ml-auto flex items-center gap-1 text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <ExternalLink className="h-3 w-3" />
+        Reveal
+      </button>
+    </div>
   );
 }
 
 function EmptyState({ onOpen }: { onOpen: () => void }) {
   return (
     <div className="flex h-full items-center justify-center">
-      <Card className="w-[420px]">
+      <Card className="w-[460px]">
         <CardHeader className="items-center text-center">
           <div className="mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-secondary">
-            <FileText className="h-6 w-6 text-muted-foreground" />
+            <Upload className="h-6 w-6 text-muted-foreground" />
           </div>
-          <CardTitle>Open a CSV file</CardTitle>
-          <CardDescription>Preview, analyze, and transform CSV data — all locally on your machine.</CardDescription>
+          <CardTitle>Drop a CSV here</CardTitle>
+          <CardDescription>
+            Or pick one to preview, analyze, and transform — all locally.
+          </CardDescription>
         </CardHeader>
         <CardContent className="flex justify-center">
           <Button onClick={onOpen}>
@@ -146,6 +259,18 @@ function EmptyState({ onOpen }: { onOpen: () => void }) {
           </Button>
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+function DropOverlay() {
+  return (
+    <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center bg-primary/10 backdrop-blur-sm">
+      <div className="rounded-2xl border-4 border-dashed border-primary bg-card px-12 py-10 text-center shadow-lg">
+        <Upload className="mx-auto mb-3 h-10 w-10 text-primary" />
+        <div className="text-lg font-semibold text-foreground">Drop your CSV</div>
+        <div className="text-sm text-muted-foreground">to open it in csvops</div>
+      </div>
     </div>
   );
 }
@@ -165,7 +290,7 @@ function ProgressBar({ p }: { p: ProgressEvent }) {
   );
 }
 
-// ---------- Common UI -----------------------------------------------------
+// ---------- Common UI ----------------------------------------------------
 
 function FormField({ label, children, hint }: {
   label: string; children: React.ReactNode; hint?: string;
@@ -186,7 +311,7 @@ function FilePicker({ label, value, onPick, icon: Icon }: {
     <div className="space-y-1.5">
       <Label>{label}</Label>
       <div className="flex items-center gap-2">
-        <Button variant="outline" onClick={onPick} size="default">
+        <Button variant="outline" onClick={onPick}>
           {Icon ? <Icon className="h-4 w-4" /> : <Folder className="h-4 w-4" />}
           Choose…
         </Button>
@@ -202,13 +327,26 @@ function FilePicker({ label, value, onPick, icon: Icon }: {
   );
 }
 
-function ResultBanner({ kind, children }: { kind: "success" | "error"; children: React.ReactNode }) {
+function ResultBanner({ kind, children, output }: {
+  kind: "success" | "error";
+  children: React.ReactNode;
+  output?: string;
+}) {
   const Icon = kind === "success" ? CheckCircle2 : AlertCircle;
-  const bg = kind === "success" ? "bg-success/10 border-success/30 text-success" : "bg-destructive/10 border-destructive/30 text-destructive";
+  const bg =
+    kind === "success"
+      ? "bg-success/10 border-success/30"
+      : "bg-destructive/10 border-destructive/30";
   return (
     <div className={`flex items-start gap-3 rounded-lg border p-3 text-sm ${bg}`}>
-      <Icon className="mt-0.5 h-4 w-4 shrink-0" />
-      <div className="text-foreground">{children}</div>
+      <Icon className={`mt-0.5 h-4 w-4 shrink-0 ${kind === "success" ? "text-success" : "text-destructive"}`} />
+      <div className="flex-1 text-foreground">{children}</div>
+      {output && (
+        <Button size="sm" variant="outline" onClick={() => RevealFile(output)}>
+          <ExternalLink className="h-3.5 w-3.5" />
+          Reveal
+        </Button>
+      )}
     </div>
   );
 }
@@ -240,7 +378,7 @@ function OpCard({ title, description, children }: {
 
 // ---------- Preview --------------------------------------------------------
 
-function PreviewTab({ path }: { path: string }) {
+function PreviewTab({ info }: { info: main.FileInfo }) {
   const [rows, setRows] = useState(20);
   const [data, setData] = useState<main.PreviewPayload | null>(null);
   const [err, setErr] = useState("");
@@ -248,12 +386,12 @@ function PreviewTab({ path }: { path: string }) {
 
   async function run() {
     setLoading(true); setErr("");
-    try { setData(await PreviewCSV(path, rows, false)); }
+    try { setData(await PreviewCSV(info.path, rows, false)); }
     catch (e: any) { setErr(String(e)); }
     finally { setLoading(false); }
   }
 
-  useEffect(() => { run(); /* eslint-disable-next-line */ }, [path]);
+  useEffect(() => { run(); /* eslint-disable-next-line */ }, [info.path]);
 
   return (
     <OpCard title="Preview" description="Pretty-print the first N rows of the file.">
@@ -273,7 +411,7 @@ function PreviewTab({ path }: { path: string }) {
   );
 }
 
-// ---------- Stats ----------------------------------------------------------
+// ---------- Stats ---------------------------------------------------------
 
 function StatsTab({ path }: { path: string }) {
   const [maxUnique, setMaxUnique] = useState(100000);
@@ -320,10 +458,13 @@ function StatsTab({ path }: { path: string }) {
   );
 }
 
-// ---------- Filter ---------------------------------------------------------
+// ---------- Filter --------------------------------------------------------
 
-function FilterTab({ path }: { path: string }) {
-  const [column, setColumn] = useState("");
+function FilterTab({ info }: { info: main.FileInfo }) {
+  const headers = info.headers || [];
+  const [column, setColumn] = useState(headers[0] || "");
+  useEffect(() => { setColumn(headers[0] || ""); }, [info.path]);
+
   const [eqSet, setEqSet] = useState(false);
   const [eq, setEq] = useState("");
   const [containsSet, setContainsSet] = useState(false);
@@ -333,18 +474,23 @@ function FilterTab({ path }: { path: string }) {
   const [ltSet, setLtSet] = useState(false);
   const [lt, setLt] = useState(0);
   const [all, setAll] = useState(false);
-  const [output, setOutput] = useState("");
+  const [output, setOutput] = useState(suggestOutput(info.path, "filtered"));
+  useEffect(() => { setOutput(suggestOutput(info.path, "filtered")); }, [info.path]);
+
   const [result, setResult] = useState<main.FilterPayload | null>(null);
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
 
-  async function pickOutput() { const p = await SaveCSVFile("filtered.csv"); if (p) setOutput(p); }
+  async function pickOutput() {
+    const p = await SaveCSVFile(output || "filtered.csv");
+    if (p) setOutput(p);
+  }
   async function run() {
     if (!output) { setErr("Choose an output file first."); return; }
-    setLoading(true); setErr("");
+    setLoading(true); setErr(""); setResult(null);
     try {
       setResult(await FilterCSV({
-        input: path, output, column,
+        input: info.path, output, column,
         eq, eqSet, contains, containsSet, gt, gtSet, lt, ltSet,
         all, withHeader: true,
       } as any));
@@ -355,7 +501,12 @@ function FilterTab({ path }: { path: string }) {
   return (
     <OpCard title="Filter" description="Keep only rows matching one or more conditions.">
       <FormField label="Column">
-        <Input value={column} onChange={(e) => setColumn(e.target.value)} placeholder="e.g. country" />
+        <Select value={column} onValueChange={setColumn}>
+          <SelectTrigger><SelectValue placeholder="Pick a column…" /></SelectTrigger>
+          <SelectContent>
+            {headers.map((h) => <SelectItem key={h} value={h}>{h}</SelectItem>)}
+          </SelectContent>
+        </Select>
       </FormField>
 
       <div className="space-y-2">
@@ -385,9 +536,9 @@ function FilterTab({ path }: { path: string }) {
 
       {err && <ResultBanner kind="error">{err}</ResultBanner>}
       {result && (
-        <ResultBanner kind="success">
+        <ResultBanner kind="success" output={output}>
           Matched <strong>{result.matched.toLocaleString()}</strong> of{" "}
-          <strong>{result.totalRows.toLocaleString()}</strong> rows. Written to <code>{output}</code>.
+          <strong>{result.totalRows.toLocaleString()}</strong> rows.
         </ResultBanner>
       )}
     </OpCard>
@@ -408,30 +559,59 @@ function ConditionRow({ checked, onCheck, label, children }: {
 
 // ---------- Dedupe --------------------------------------------------------
 
-function DedupeTab({ path }: { path: string }) {
-  const [keys, setKeys] = useState("");
+function DedupeTab({ info }: { info: main.FileInfo }) {
+  const headers = info.headers || [];
+  const [picked, setPicked] = useState<string[]>([]);
+  useEffect(() => { setPicked([]); }, [info.path]);
+  const keysCSV = useMemo(() => picked.join(","), [picked]);
+
   const [keepLast, setKeepLast] = useState(false);
   const [caseSensitive, setCaseSensitive] = useState(false);
-  const [output, setOutput] = useState("");
+  const [output, setOutput] = useState(suggestOutput(info.path, "dedup"));
+  useEffect(() => { setOutput(suggestOutput(info.path, "dedup")); }, [info.path]);
+
   const [result, setResult] = useState<main.DedupePayload | null>(null);
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
 
-  async function pickOutput() { const p = await SaveCSVFile("dedup.csv"); if (p) setOutput(p); }
+  function toggle(h: string) {
+    setPicked((p) => p.includes(h) ? p.filter((x) => x !== h) : [...p, h]);
+  }
+
+  async function pickOutput() { const p = await SaveCSVFile(output || "dedup.csv"); if (p) setOutput(p); }
   async function run() {
     if (!output) { setErr("Choose an output file first."); return; }
-    if (!keys.trim()) { setErr("Enter at least one key column."); return; }
-    setLoading(true); setErr("");
-    try { setResult(await DedupeCSV({ input: path, output, keyColumns: keys, keepLast, caseSensitive } as any)); }
+    if (picked.length === 0) { setErr("Pick at least one key column."); return; }
+    setLoading(true); setErr(""); setResult(null);
+    try { setResult(await DedupeCSV({ input: info.path, output, keyColumns: keysCSV, keepLast, caseSensitive } as any)); }
     catch (e: any) { setErr(String(e)); }
     finally { setLoading(false); }
   }
 
   return (
     <OpCard title="Dedupe" description="Remove duplicate rows by one or more key columns. Output preserves original file order.">
-      <FormField label="Key columns" hint="Comma-separated, e.g. email or first,last">
-        <Input value={keys} onChange={(e) => setKeys(e.target.value)} placeholder="email" />
-      </FormField>
+      <div className="space-y-1.5">
+        <Label>Key columns ({picked.length} selected)</Label>
+        <div className="flex flex-wrap gap-2">
+          {headers.map((h) => {
+            const on = picked.includes(h);
+            return (
+              <button
+                key={h}
+                onClick={() => toggle(h)}
+                className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+                  on
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-border bg-card text-foreground hover:bg-secondary"
+                }`}
+              >
+                {h}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       <div className="flex flex-wrap gap-5">
         <label className="flex cursor-pointer items-center gap-2 text-sm">
           <Checkbox checked={keepLast} onCheckedChange={(v) => setKeepLast(!!v)} />
@@ -442,21 +622,23 @@ function DedupeTab({ path }: { path: string }) {
           Case-sensitive
         </label>
       </div>
+
       <FilePicker label="Output file" value={output} onPick={pickOutput} icon={Save} />
       <RunButton onClick={run} loading={loading}>Run dedupe</RunButton>
+
       {err && <ResultBanner kind="error">{err}</ResultBanner>}
       {result && (
-        <ResultBanner kind="success">
+        <ResultBanner kind="success" output={output}>
           Kept <strong>{result.uniqueRows.toLocaleString()}</strong> unique row(s),
           removed <strong>{result.duplicates.toLocaleString()}</strong> duplicates from{" "}
-          <strong>{result.totalRows.toLocaleString()}</strong> total. Written to <code>{output}</code>.
+          <strong>{result.totalRows.toLocaleString()}</strong> total.
         </ResultBanner>
       )}
     </OpCard>
   );
 }
 
-// ---------- Split ---------------------------------------------------------
+// ---------- Split --------------------------------------------------------
 
 function SplitTab({ path }: { path: string }) {
   const [outDir, setOutDir] = useState("");
@@ -469,7 +651,7 @@ function SplitTab({ path }: { path: string }) {
   async function pickOutDir() { const p = await OpenDirectory("Select output directory"); if (p) setOutDir(p); }
   async function run() {
     if (!outDir) { setErr("Choose an output directory first."); return; }
-    setLoading(true); setErr("");
+    setLoading(true); setErr(""); setResult(null);
     try { setResult(await SplitCSV({ input: path, outputDir: outDir, rowsPerFile, withHeader } as any)); }
     catch (e: any) { setErr(String(e)); }
     finally { setLoading(false); }
@@ -492,16 +674,16 @@ function SplitTab({ path }: { path: string }) {
       <RunButton onClick={run} loading={loading}>Run split</RunButton>
       {err && <ResultBanner kind="error">{err}</ResultBanner>}
       {result && (
-        <ResultBanner kind="success">
+        <ResultBanner kind="success" output={outDir}>
           Wrote <strong>{result.filesCreated}</strong> file(s),{" "}
-          <strong>{result.rowsProcessed.toLocaleString()}</strong> row(s) total, into <code>{outDir}</code>.
+          <strong>{result.rowsProcessed.toLocaleString()}</strong> row(s) total.
         </ResultBanner>
       )}
     </OpCard>
   );
 }
 
-// ---------- Merge ---------------------------------------------------------
+// ---------- Merge --------------------------------------------------------
 
 function MergeTab() {
   const [inDir, setInDir] = useState("");
@@ -511,12 +693,18 @@ function MergeTab() {
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
 
-  async function pickInDir() { const p = await OpenDirectory("Select directory of CSV files"); if (p) setInDir(p); }
-  async function pickOutput() { const p = await SaveCSVFile("merged.csv"); if (p) setOutput(p); }
+  async function pickInDir() {
+    const p = await OpenDirectory("Select directory of CSV files");
+    if (p) {
+      setInDir(p);
+      if (!output) setOutput(suggestOutput(p + "/merged", "csv", ""));
+    }
+  }
+  async function pickOutput() { const p = await SaveCSVFile(output || "merged.csv"); if (p) setOutput(p); }
   async function run() {
     if (!inDir) { setErr("Choose an input directory."); return; }
     if (!output) { setErr("Choose an output file."); return; }
-    setLoading(true); setErr("");
+    setLoading(true); setErr(""); setResult(null);
     try { setResult(await MergeCSV({ inputDir: inDir, output, withHeader } as any)); }
     catch (e: any) { setErr(String(e)); }
     finally { setLoading(false); }
@@ -533,30 +721,32 @@ function MergeTab() {
       <RunButton onClick={run} loading={loading}>Run merge</RunButton>
       {err && <ResultBanner kind="error">{err}</ResultBanner>}
       {result && (
-        <ResultBanner kind="success">
+        <ResultBanner kind="success" output={output}>
           Merged <strong>{result.filesProcessed}</strong> file(s),{" "}
-          <strong>{result.rowsWritten.toLocaleString()}</strong> row(s) → <code>{output}</code>.
+          <strong>{result.rowsWritten.toLocaleString()}</strong> row(s).
         </ResultBanner>
       )}
     </OpCard>
   );
 }
 
-// ---------- ToSQLite ------------------------------------------------------
+// ---------- ToSQLite ----------------------------------------------------
 
-function SQLiteTab({ path }: { path: string }) {
-  const [dbPath, setDbPath] = useState("");
+function SQLiteTab({ info }: { info: main.FileInfo }) {
+  const [dbPath, setDbPath] = useState(suggestOutput(info.path, "data", ".db"));
+  useEffect(() => { setDbPath(suggestOutput(info.path, "data", ".db")); }, [info.path]);
+
   const [table, setTable] = useState("");
   const [ifExists, setIfExists] = useState("replace");
   const [result, setResult] = useState<main.ToSQLitePayload | null>(null);
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
 
-  async function pickDB() { const p = await SaveDBFile("data.db"); if (p) setDbPath(p); }
+  async function pickDB() { const p = await SaveDBFile(dbPath || "data.db"); if (p) setDbPath(p); }
   async function run() {
     if (!dbPath) { setErr("Choose an output .db file first."); return; }
-    setLoading(true); setErr("");
-    try { setResult(await ToSQLiteCSV({ input: path, dbPath, table, ifExists } as any)); }
+    setLoading(true); setErr(""); setResult(null);
+    try { setResult(await ToSQLiteCSV({ input: info.path, dbPath, table, ifExists } as any)); }
     catch (e: any) { setErr(String(e)); }
     finally { setLoading(false); }
   }
@@ -583,19 +773,21 @@ function SQLiteTab({ path }: { path: string }) {
       <RunButton onClick={run} loading={loading}>Run import</RunButton>
       {err && <ResultBanner kind="error">{err}</ResultBanner>}
       {result?.skipped && (
-        <ResultBanner kind="success">Table <code>{result.table}</code> already exists — skipped.</ResultBanner>
+        <ResultBanner kind="success" output={dbPath}>
+          Table <code>{result.table}</code> already exists — skipped.
+        </ResultBanner>
       )}
       {result && !result.skipped && (
-        <ResultBanner kind="success">
+        <ResultBanner kind="success" output={dbPath}>
           Imported <strong>{result.rowsImported.toLocaleString()}</strong> row(s) into table{" "}
-          <code>{result.table}</code> at <code>{dbPath}</code>.
+          <code>{result.table}</code>.
         </ResultBanner>
       )}
     </OpCard>
   );
 }
 
-// ---------- Data table ----------------------------------------------------
+// ---------- Data table ---------------------------------------------------
 
 function DataTable({ headers, rows, caption }: {
   headers: string[]; rows: string[][]; caption?: string;
@@ -617,7 +809,7 @@ function DataTable({ headers, rows, caption }: {
             {rows.map((r, i) => (
               <tr key={i} className="border-b border-border last:border-0 hover:bg-secondary/60">
                 {r.map((c, j) => (
-                  <td key={j} className="px-3 py-2 font-mono text-xs text-foreground">{c}</td>
+                  <td key={j} className="px-3 py-2 font-mono text-xs text-foreground" title={c}>{c}</td>
                 ))}
               </tr>
             ))}

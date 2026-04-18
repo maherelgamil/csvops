@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
+	goruntime "runtime"
 	"strings"
 
 	"github.com/maherelgamil/csvops/pkg/csvops"
@@ -80,6 +82,63 @@ func (a *App) OpenDirectory(title string) (string, error) {
 	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
 		Title: title,
 	})
+}
+
+// ----- File metadata --------------------------------------------------------
+
+type FileInfo struct {
+	Path    string `json:"path"`
+	Size    int64  `json:"size"`
+	Rows    int64  `json:"rows"`
+	Headers []string `json:"headers"`
+}
+
+// FileInfoCSV returns size + row count + headers for a CSV. The frontend uses
+// it to show file context and to populate column dropdowns.
+func (a *App) FileInfoCSV(path string) (FileInfo, error) {
+	st, err := os.Stat(path)
+	if err != nil {
+		return FileInfo{}, err
+	}
+	rows, _ := csvops.CountDataRows(path, ',')
+	headers, _ := readHeaders(path)
+	return FileInfo{
+		Path:    path,
+		Size:    st.Size(),
+		Rows:    rows,
+		Headers: headers,
+	}, nil
+}
+
+func readHeaders(path string) ([]string, error) {
+	res, err := csvops.Preview(context.Background(), csvops.PreviewOptions{
+		Input: path,
+		Rows:  0,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return res.Headers, nil
+}
+
+// RevealFile shows a file (or dir) in the OS native file manager.
+func (a *App) RevealFile(path string) error {
+	if path == "" {
+		return fmt.Errorf("empty path")
+	}
+	switch goruntime.GOOS {
+	case "darwin":
+		return exec.Command("open", "-R", path).Start()
+	case "windows":
+		return exec.Command("explorer", "/select,", path).Start()
+	default:
+		// best effort on Linux: open the parent dir
+		dir := path
+		if st, err := os.Stat(path); err == nil && !st.IsDir() {
+			dir = strings.TrimSuffix(path, "/"+st.Name())
+		}
+		return exec.Command("xdg-open", dir).Start()
+	}
 }
 
 // ----- Preview --------------------------------------------------------------
