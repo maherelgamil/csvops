@@ -1,13 +1,12 @@
 package cmd
 
 import (
-	"encoding/csv"
+	"context"
 	"fmt"
-	"io"
 	"os"
-	"sort"
 	"strings"
 
+	"github.com/maherelgamil/csvops/pkg/csvops"
 	"github.com/olekukonko/tablewriter"
 	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
@@ -26,77 +25,25 @@ var statsCmd = &cobra.Command{
 			return fmt.Errorf("please provide an input file using --input")
 		}
 
-		totalRows, err := countDataRows(statsInput, ',')
+		var bar *progressbar.ProgressBar
+		res, err := csvops.Stats(context.Background(), csvops.StatsOptions{
+			Input:     statsInput,
+			MaxUnique: statsMaxUnique,
+			Delimiter: ',',
+			Progress: func(done, total int64) {
+				if bar == nil {
+					bar = progressbar.Default(total, "Analyzing")
+				}
+				_ = bar.Set64(done)
+			},
+		})
 		if err != nil {
 			return err
 		}
 
-		file, err := os.Open(statsInput)
-		if err != nil {
-			return fmt.Errorf("failed to open file: %w", err)
-		}
-		defer file.Close()
-
-		reader := csv.NewReader(file)
-		reader.FieldsPerRecord = -1
-
-		headers, err := reader.Read()
-		if err != nil {
-			return fmt.Errorf("failed to read headers: %w", err)
-		}
-
-		columnCount := len(headers)
-
-		type columnStats struct {
-			empty     int
-			uniques   map[string]int
-			capped    bool
-			totalVals int
-		}
-
-		stats := make([]columnStats, columnCount)
-		for i := 0; i < columnCount; i++ {
-			stats[i].uniques = make(map[string]int)
-		}
-
-		bar := progressbar.Default(totalRows, "Analyzing")
-		rowCount := 0
-
-		for {
-			row, err := reader.Read()
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				continue
-			}
-			rowCount++
-			for i := range headers {
-				cell := ""
-				if i < len(row) {
-					cell = strings.TrimSpace(row[i])
-				}
-				if cell == "" {
-					stats[i].empty++
-					continue
-				}
-				stats[i].totalVals++
-				if statsMaxUnique > 0 && len(stats[i].uniques) >= statsMaxUnique {
-					if _, exists := stats[i].uniques[cell]; exists {
-						stats[i].uniques[cell]++
-					} else {
-						stats[i].capped = true
-					}
-				} else {
-					stats[i].uniques[cell]++
-				}
-			}
-			_ = bar.Add(1)
-		}
-
 		fmt.Printf("\n📊 Stats for: %s\n", statsInput)
-		fmt.Printf("Total Rows (excluding header): %d\n", rowCount)
-		fmt.Printf("Columns: %d\n\n", columnCount)
+		fmt.Printf("Total Rows (excluding header): %d\n", res.TotalRows)
+		fmt.Printf("Columns: %d\n\n", len(res.Columns))
 
 		table := tablewriter.NewWriter(os.Stdout)
 		table.SetHeader([]string{"Column", "Unique Values", "Empty Fields", "Top 3 Values"})
@@ -104,38 +51,22 @@ var statsCmd = &cobra.Command{
 		table.SetRowLine(true)
 		table.SetAlignment(tablewriter.ALIGN_LEFT)
 
-		type kv struct {
-			Key   string
-			Count int
-		}
-
-		for i, name := range headers {
-			uniqueCount := fmt.Sprintf("%d", len(stats[i].uniques))
-			if stats[i].capped {
-				uniqueCount = fmt.Sprintf(">=%d (capped)", len(stats[i].uniques))
+		for _, col := range res.Columns {
+			unique := fmt.Sprintf("%d", col.Unique)
+			if col.UniqueCapped {
+				unique = fmt.Sprintf(">=%d (capped)", col.Unique)
 			}
-
-			sorted := make([]kv, 0, len(stats[i].uniques))
-			for k, v := range stats[i].uniques {
-				sorted = append(sorted, kv{k, v})
+			top := make([]string, 0, len(col.Top))
+			for _, v := range col.Top {
+				top = append(top, fmt.Sprintf("%s (%d)", v.Value, v.Count))
 			}
-			sort.Slice(sorted, func(a, b int) bool {
-				return sorted[a].Count > sorted[b].Count
-			})
-
-			topValues := []string{}
-			for j := 0; j < len(sorted) && j < 3; j++ {
-				topValues = append(topValues, fmt.Sprintf("%s (%d)", sorted[j].Key, sorted[j].Count))
-			}
-
 			table.Append([]string{
-				name,
-				uniqueCount,
-				fmt.Sprintf("%d", stats[i].empty),
-				strings.Join(topValues, ", "),
+				col.Name,
+				unique,
+				fmt.Sprintf("%d", col.Empty),
+				strings.Join(top, ", "),
 			})
 		}
-
 		table.Render()
 		return nil
 	},
