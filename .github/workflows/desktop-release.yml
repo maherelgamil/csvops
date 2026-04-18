@@ -1,0 +1,93 @@
+name: Desktop Release
+
+on:
+  push:
+    tags:
+      - 'desktop-v*'
+
+# Serialize so two tag pushes can't race the same GitHub release.
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: darwin/universal
+            artifact_name: csvops-desktop-macos-universal
+            artifact_glob: 'desktop/build/bin/*.app'
+            archive_cmd: 'cd desktop/build/bin && zip -r ../../../csvops-desktop-macos-universal.zip *.app'
+            archive_path: csvops-desktop-macos-universal.zip
+          - os: windows-latest
+            platform: windows/amd64
+            artifact_name: csvops-desktop-windows-amd64
+            artifact_glob: 'desktop/build/bin/*.exe'
+            archive_cmd: 'powershell Compress-Archive -Path desktop/build/bin/*.exe -DestinationPath csvops-desktop-windows-amd64.zip'
+            archive_path: csvops-desktop-windows-amd64.zip
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          # The desktop module pins go 1.23 in its go.mod but Wails needs the
+          # Darwin LC_UUID fix from Go 1.24+; pin explicitly here.
+          go-version: '1.24'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+        shell: bash
+
+      - name: Add GOPATH/bin to PATH (unix)
+        if: runner.os != 'Windows'
+        run: echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+        shell: bash
+
+      - name: Add GOPATH/bin to PATH (windows)
+        if: runner.os == 'Windows'
+        run: echo "$(go env GOPATH)\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        shell: pwsh
+
+      - name: Build
+        working-directory: desktop
+        run: wails build -platform ${{ matrix.platform }} -clean
+        shell: bash
+
+      - name: Archive
+        run: ${{ matrix.archive_cmd }}
+        shell: bash
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.archive_path }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
