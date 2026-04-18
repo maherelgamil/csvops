@@ -33,13 +33,6 @@ header h1 {
   font-size: 14px;
 }
 
-.toolbar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
 button {
   padding: 8px 14px;
   background: #2563eb;
@@ -60,33 +53,100 @@ button:disabled {
   cursor: not-allowed;
 }
 
+input[type="text"],
+input[type="number"] {
+  padding: 6px 10px;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  background: #0f1724;
+  color: #e6e6e6;
+  font-size: 13px;
+}
+
+input[type="number"] {
+  width: 90px;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .path {
   background: #0f1724;
   padding: 6px 10px;
   border-radius: 4px;
   font-size: 12px;
-  max-width: 500px;
+  max-width: 700px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.rows {
+.tabs {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 14px;
-  color: #9aa5b1;
+  gap: 4px;
+  border-bottom: 1px solid #334155;
 }
 
-.rows input {
-  width: 70px;
-  padding: 6px;
-  border: 1px solid #334155;
-  border-radius: 4px;
-  background: #0f1724;
+.tab {
+  background: transparent;
+  color: #9aa5b1;
+  border-radius: 0;
+  padding: 10px 16px;
+  border-bottom: 2px solid transparent;
+}
+
+.tab:hover:not(:disabled) {
+  background: transparent;
   color: #e6e6e6;
-  font-size: 14px;
+}
+
+.tab-active {
+  color: #e6e6e6;
+  border-bottom-color: #2563eb;
+}
+
+.tab-content {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+}
+
+.panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow: hidden;
+}
+
+.form-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 10px;
+}
+
+.form-grid label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #c0c8d2;
+}
+
+.condition {
+  background: #0f1724;
+  padding: 8px;
+  border-radius: 4px;
 }
 
 .error {
@@ -96,10 +156,18 @@ button:disabled {
   border-radius: 6px;
 }
 
-.loading,
-.empty {
-  padding: 24px;
-  text-align: center;
+.success {
+  padding: 12px;
+  background: #14532d;
+  color: #bbf7d0;
+  border-radius: 6px;
+}
+
+.empty-state {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: #9aa5b1;
 }
 
@@ -108,6 +176,14 @@ button:disabled {
   overflow: auto;
   border: 1px solid #334155;
   border-radius: 6px;
+}
+
+.stats-summary {
+  padding: 12px;
+  background: #0f1724;
+  border-bottom: 1px solid #334155;
+  font-size: 13px;
+  color: #c0c8d2;
 }
 
 table {
