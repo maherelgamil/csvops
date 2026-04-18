@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"strings"
 
 	"github.com/maherelgamil/csvops/pkg/csvops"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -14,15 +16,25 @@ type App struct {
 	ctx context.Context
 }
 
-func NewApp() *App {
-	return &App{}
-}
-
+func NewApp() *App { return &App{} }
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 }
 
-// ----- File pickers --------------------------------------------------------
+// emitProgress builds a Progress callback that sends a "progress" event to
+// the frontend tagged with the operation name. The frontend subscribes once
+// and routes by op.
+func (a *App) emitProgress(op string) csvops.Progress {
+	return func(done, total int64) {
+		runtime.EventsEmit(a.ctx, "progress", map[string]any{
+			"op":    op,
+			"done":  done,
+			"total": total,
+		})
+	}
+}
+
+// ----- File / dir pickers --------------------------------------------------
 
 func (a *App) OpenCSVFile() (string, error) {
 	return runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
@@ -44,6 +56,29 @@ func (a *App) SaveCSVFile(suggestedName string) (string, error) {
 		Filters: []runtime.FileFilter{
 			{DisplayName: "CSV files (*.csv)", Pattern: "*.csv"},
 		},
+	})
+}
+
+func (a *App) SaveDBFile(suggestedName string) (string, error) {
+	if suggestedName == "" {
+		suggestedName = "output.db"
+	}
+	return runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+		Title:           "Save SQLite database as…",
+		DefaultFilename: suggestedName,
+		Filters: []runtime.FileFilter{
+			{DisplayName: "SQLite databases (*.db)", Pattern: "*.db"},
+			{DisplayName: "All files", Pattern: "*.*"},
+		},
+	})
+}
+
+func (a *App) OpenDirectory(title string) (string, error) {
+	if title == "" {
+		title = "Select directory"
+	}
+	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: title,
 	})
 }
 
@@ -88,6 +123,7 @@ func (a *App) StatsCSV(path string, maxUnique int) (StatsPayload, error) {
 	res, err := csvops.Stats(a.ctx, csvops.StatsOptions{
 		Input:     path,
 		MaxUnique: maxUnique,
+		Progress:  a.emitProgress("stats"),
 	})
 	if err != nil {
 		return StatsPayload{}, err
@@ -111,9 +147,6 @@ func (a *App) StatsCSV(path string, maxUnique int) (StatsPayload, error) {
 
 // ----- Filter ---------------------------------------------------------------
 
-// FilterRequest is intentionally JSON-friendly: each *Set boolean tells the
-// backend which condition to apply. This keeps the wire format simple instead
-// of wrestling with optional/null pointers across the JS bridge.
 type FilterRequest struct {
 	Input       string  `json:"input"`
 	Output      string  `json:"output"`
@@ -148,6 +181,7 @@ func (a *App) FilterCSV(req FilterRequest) (FilterPayload, error) {
 		Column:     req.Column,
 		All:        req.All,
 		WithHeader: req.WithHeader,
+		Progress:   a.emitProgress("filter"),
 	}
 	if req.EqSet {
 		opts.Eq = &req.Eq
@@ -167,4 +201,149 @@ func (a *App) FilterCSV(req FilterRequest) (FilterPayload, error) {
 		return FilterPayload{}, err
 	}
 	return FilterPayload{TotalRows: res.TotalRows, Matched: res.Matched}, nil
+}
+
+// ----- Split ----------------------------------------------------------------
+
+type SplitRequest struct {
+	Input       string `json:"input"`
+	OutputDir   string `json:"outputDir"`
+	RowsPerFile int    `json:"rowsPerFile"`
+	WithHeader  bool   `json:"withHeader"`
+}
+
+type SplitPayload struct {
+	RowsProcessed int64 `json:"rowsProcessed"`
+	FilesCreated  int   `json:"filesCreated"`
+}
+
+func (a *App) SplitCSV(req SplitRequest) (SplitPayload, error) {
+	res, err := csvops.Split(a.ctx, csvops.SplitOptions{
+		Input:       req.Input,
+		OutputDir:   req.OutputDir,
+		RowsPerFile: req.RowsPerFile,
+		WithHeader:  req.WithHeader,
+		Progress:    a.emitProgress("split"),
+	})
+	if err != nil {
+		return SplitPayload{}, err
+	}
+	return SplitPayload{
+		RowsProcessed: res.RowsProcessed,
+		FilesCreated:  res.FilesCreated,
+	}, nil
+}
+
+// ----- Dedupe ---------------------------------------------------------------
+
+type DedupeRequest struct {
+	Input         string `json:"input"`
+	Output        string `json:"output"`
+	KeyColumns    string `json:"keyColumns"` // comma-separated
+	KeepLast      bool   `json:"keepLast"`
+	CaseSensitive bool   `json:"caseSensitive"`
+}
+
+type DedupePayload struct {
+	TotalRows  int64 `json:"totalRows"`
+	UniqueRows int   `json:"uniqueRows"`
+	Duplicates int   `json:"duplicates"`
+}
+
+func (a *App) DedupeCSV(req DedupeRequest) (DedupePayload, error) {
+	keys := []string{}
+	for _, k := range strings.Split(req.KeyColumns, ",") {
+		k = strings.TrimSpace(k)
+		if k != "" {
+			keys = append(keys, k)
+		}
+	}
+	res, err := csvops.Dedupe(a.ctx, csvops.DedupeOptions{
+		Input:         req.Input,
+		Output:        req.Output,
+		KeyColumns:    keys,
+		KeepLast:      req.KeepLast,
+		CaseSensitive: req.CaseSensitive,
+		Progress:      a.emitProgress("dedupe"),
+	})
+	if err != nil {
+		return DedupePayload{}, err
+	}
+	return DedupePayload{
+		TotalRows:  res.TotalRows,
+		UniqueRows: res.UniqueRows,
+		Duplicates: res.Duplicates,
+	}, nil
+}
+
+// ----- Merge ----------------------------------------------------------------
+
+type MergeRequest struct {
+	InputDir   string `json:"inputDir"`
+	Output     string `json:"output"`
+	WithHeader bool   `json:"withHeader"`
+}
+
+type MergePayload struct {
+	FilesProcessed int   `json:"filesProcessed"`
+	RowsWritten    int64 `json:"rowsWritten"`
+}
+
+func (a *App) MergeCSV(req MergeRequest) (MergePayload, error) {
+	out, err := os.Create(req.Output)
+	if err != nil {
+		return MergePayload{}, err
+	}
+	defer out.Close()
+
+	res, err := csvops.Merge(a.ctx, csvops.MergeOptions{
+		InputDir:   req.InputDir,
+		Output:     out,
+		WithHeader: req.WithHeader,
+		SkipErrors: true,
+		Progress:   a.emitProgress("merge"),
+	})
+	if err != nil {
+		return MergePayload{}, err
+	}
+	return MergePayload{
+		FilesProcessed: res.FilesProcessed,
+		RowsWritten:    res.RowsWritten,
+	}, nil
+}
+
+// ----- ToSQLite -------------------------------------------------------------
+
+type ToSQLiteRequest struct {
+	Input    string `json:"input"`
+	DBPath   string `json:"dbPath"`
+	Table    string `json:"table"`
+	IfExists string `json:"ifExists"`
+}
+
+type ToSQLitePayload struct {
+	Table        string `json:"table"`
+	RowsImported int64  `json:"rowsImported"`
+	Skipped      bool   `json:"skipped"`
+}
+
+func (a *App) ToSQLiteCSV(req ToSQLiteRequest) (ToSQLitePayload, error) {
+	if req.IfExists == "" {
+		req.IfExists = "replace"
+	}
+	res, err := csvops.ToSQLite(a.ctx, csvops.ToSQLiteOptions{
+		Input:    req.Input,
+		DBPath:   req.DBPath,
+		Table:    req.Table,
+		IfExists: csvops.IfExistsAction(req.IfExists),
+		Progress: a.emitProgress("to-sqlite"),
+	})
+	if err != nil {
+		return ToSQLitePayload{}, fmt.Errorf("%w", err)
+	}
+	return ToSQLitePayload{
+		Table:        res.Table,
+		RowsImported: res.RowsImported,
+		Skipped:      res.Skipped,
+	}, nil
 }

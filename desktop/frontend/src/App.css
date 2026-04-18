@@ -218,3 +218,43 @@ tbody tr:hover {
   background: #0f1724;
   border-top: 1px solid #334155;
 }
+
+select {
+  padding: 6px 10px;
+  background: #0f1724;
+  color: #e6e6e6;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.progress-wrap {
+  position: fixed;
+  bottom: 16px;
+  left: 16px;
+  right: 16px;
+  background: #0f1724;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  padding: 10px 14px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+}
+
+.progress-label {
+  font-size: 12px;
+  color: #c0c8d2;
+  margin-bottom: 6px;
+}
+
+.progress-bar {
+  height: 6px;
+  background: #1f2a3d;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: #2563eb;
+  transition: width 0.1s linear;
+}
