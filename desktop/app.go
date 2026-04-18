@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/csv"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	goruntime "runtime"
@@ -139,6 +141,68 @@ func (a *App) RevealFile(path string) error {
 		}
 		return exec.Command("xdg-open", dir).Start()
 	}
+}
+
+// ----- ReadPage (paginated browsing) ----------------------------------------
+
+type PagePayload struct {
+	Headers   []string   `json:"headers"`
+	Rows      [][]string `json:"rows"`
+	Offset    int64      `json:"offset"`
+	TotalRows int64      `json:"totalRows"`
+}
+
+// ReadPage returns a paginated window of rows from a CSV. Offset is the index
+// of the first data row to return (0-based, header excluded). Limit caps the
+// returned rows. The frontend uses this to render the unified table view.
+func (a *App) ReadPage(path string, offset, limit int) (PagePayload, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	total, err := csvops.CountDataRows(path, ',')
+	if err != nil {
+		return PagePayload{}, err
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return PagePayload{}, err
+	}
+	defer f.Close()
+
+	r := csv.NewReader(f)
+	r.FieldsPerRecord = -1
+
+	headers, err := r.Read()
+	if err != nil {
+		return PagePayload{}, err
+	}
+
+	// Skip `offset` rows.
+	for i := 0; i < offset; i++ {
+		if _, err := r.Read(); err != nil {
+			return PagePayload{Headers: headers, Offset: int64(offset), TotalRows: total}, nil
+		}
+	}
+
+	rows := make([][]string, 0, limit)
+	for len(rows) < limit {
+		rec, err := r.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			continue
+		}
+		rows = append(rows, rec)
+	}
+
+	return PagePayload{
+		Headers:   headers,
+		Rows:      rows,
+		Offset:    int64(offset),
+		TotalRows: total,
+	}, nil
 }
 
 // ----- Preview --------------------------------------------------------------

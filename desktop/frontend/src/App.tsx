@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import {
   OpenCSVFile,
   OpenDirectory,
-  PreviewCSV,
   StatsCSV,
   FilterCSV,
   SaveCSVFile,
@@ -13,6 +12,7 @@ import {
   ToSQLiteCSV,
   FileInfoCSV,
   RevealFile,
+  ReadPage,
 } from "../wailsjs/go/main/App";
 import { main } from "../wailsjs/go/models";
 import { EventsOn, EventsOff } from "../wailsjs/runtime/runtime";
@@ -20,15 +20,17 @@ import { EventsOn, EventsOff } from "../wailsjs/runtime/runtime";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-  CardDescription,
-} from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Progress } from "@/components/ui/progress";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Sheet, SheetContent } from "@/components/ui/sheet";
 import {
   Select,
   SelectContent,
@@ -36,15 +38,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Progress } from "@/components/ui/progress";
 import {
   FileText,
   Folder,
   Save,
-  Eye,
-  BarChart3,
   Filter as FilterIcon,
-  Copy,
+  Copy as CopyIcon,
   Scissors,
   Combine,
   Database,
@@ -56,21 +55,26 @@ import {
   Hash,
   HardDrive,
   Upload,
+  ChevronLeft,
+  ChevronRight,
+  ChevronDown,
+  MoreHorizontal,
+  BarChart3,
+  Wrench,
 } from "lucide-react";
 
 // ---------- helpers --------------------------------------------------------
 
 type ProgressEvent = { op: string; done: number; total: number };
 
-function formatBytes(b: number): string {
+function formatBytes(b: number) {
   if (b < 1024) return `${b} B`;
   if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
-  if (b < 1024 * 1024 * 1024) return `${(b / 1024 / 1024).toFixed(1)} MB`;
-  return `${(b / 1024 / 1024 / 1024).toFixed(2)} GB`;
+  if (b < 1024 ** 3) return `${(b / 1024 / 1024).toFixed(1)} MB`;
+  return `${(b / 1024 ** 3).toFixed(2)} GB`;
 }
 
-/** Suggest a sibling output path by inserting `.suffix` before the extension. */
-function suggestOutput(input: string, suffix: string, newExt?: string): string {
+function suggestOutput(input: string, suffix: string, ext?: string) {
   if (!input) return "";
   const sep = input.includes("\\") ? "\\" : "/";
   const i = input.lastIndexOf(sep);
@@ -78,17 +82,26 @@ function suggestOutput(input: string, suffix: string, newExt?: string): string {
   const name = i >= 0 ? input.slice(i + 1) : input;
   const dot = name.lastIndexOf(".");
   const stem = dot > 0 ? name.slice(0, dot) : name;
-  const ext = newExt ?? (dot > 0 ? name.slice(dot) : ".csv");
-  return `${dir}${stem}.${suffix}${ext}`;
+  const finalExt = ext ?? (dot > 0 ? name.slice(dot) : ".csv");
+  return `${dir}${stem}.${suffix}${finalExt}`;
 }
+
+const PAGE_SIZE = 100;
 
 // ---------- root -----------------------------------------------------------
 
+type ActionKind = "filter" | "dedupe" | "split" | "sqlite" | "merge" | null;
+
 export default function App() {
   const [info, setInfo] = useState<main.FileInfo | null>(null);
+  const [page, setPage] = useState<main.PagePayload | null>(null);
+  const [offset, setOffset] = useState(0);
   const [loadingFile, setLoadingFile] = useState(false);
+  const [loadingPage, setLoadingPage] = useState(false);
+  const [stats, setStats] = useState<main.StatsPayload | null>(null);
   const [progress, setProgress] = useState<ProgressEvent | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [action, setAction] = useState<ActionKind>(null);
 
   useEffect(() => {
     EventsOn("progress", (p: ProgressEvent) => setProgress(p));
@@ -99,15 +112,9 @@ export default function App() {
     };
   }, []);
 
-  // Native HTML drag/drop also works because Wails enables file drop.
   useEffect(() => {
-    const onDragOver = (e: DragEvent) => {
-      e.preventDefault();
-      setDragging(true);
-    };
-    const onDragLeave = (e: DragEvent) => {
-      if (e.target === document.documentElement) setDragging(false);
-    };
+    const onDragOver = (e: DragEvent) => { e.preventDefault(); setDragging(true); };
+    const onDragLeave = (e: DragEvent) => { if (e.target === document.documentElement) setDragging(false); };
     const onDrop = () => setDragging(false);
     window.addEventListener("dragover", onDragOver);
     window.addEventListener("dragleave", onDragLeave);
@@ -122,11 +129,13 @@ export default function App() {
   async function loadFile(path: string) {
     if (!path) return;
     setLoadingFile(true);
+    setStats(null);
     try {
       const i = await FileInfoCSV(path);
       setInfo(i);
-    } catch (e) {
-      console.error(e);
+      setOffset(0);
+      const p = await ReadPage(path, 0, PAGE_SIZE);
+      setPage(p);
     } finally {
       setLoadingFile(false);
     }
@@ -137,51 +146,108 @@ export default function App() {
     if (p) await loadFile(p);
   }
 
+  async function gotoOffset(newOffset: number) {
+    if (!info) return;
+    setLoadingPage(true);
+    try {
+      const p = await ReadPage(info.path, Math.max(0, newOffset), PAGE_SIZE);
+      setPage(p);
+      setOffset(p.offset);
+    } finally {
+      setLoadingPage(false);
+    }
+  }
+
+  async function loadStatsIfNeeded(): Promise<main.StatsPayload | null> {
+    if (stats) return stats;
+    if (!info) return null;
+    const s = await StatsCSV(info.path, 100000);
+    setStats(s);
+    return s;
+  }
+
   return (
     <div className="relative flex h-screen flex-col bg-[hsl(210_40%_98%)]">
       <Header info={info} onOpen={pickFile} loading={loadingFile} />
-      {info && <FileInfoBar info={info} />}
 
-      <div className="flex-1 overflow-auto px-6 py-5">
-        {!info ? (
+      {!info ? (
+        <div className="flex-1 overflow-auto p-6">
           <EmptyState onOpen={pickFile} />
-        ) : (
-          <Tabs defaultValue="preview" className="w-full">
-            <TabsList className="mb-4">
-              <TabsTrigger value="preview"><Eye className="h-3.5 w-3.5" />Preview</TabsTrigger>
-              <TabsTrigger value="stats"><BarChart3 className="h-3.5 w-3.5" />Stats</TabsTrigger>
-              <TabsTrigger value="filter"><FilterIcon className="h-3.5 w-3.5" />Filter</TabsTrigger>
-              <TabsTrigger value="dedupe"><Copy className="h-3.5 w-3.5" />Dedupe</TabsTrigger>
-              <TabsTrigger value="split"><Scissors className="h-3.5 w-3.5" />Split</TabsTrigger>
-              <TabsTrigger value="merge"><Combine className="h-3.5 w-3.5" />Merge</TabsTrigger>
-              <TabsTrigger value="sqlite"><Database className="h-3.5 w-3.5" />SQLite</TabsTrigger>
-            </TabsList>
-
-            <TabsContent value="preview"><PreviewTab info={info} /></TabsContent>
-            <TabsContent value="stats"><StatsTab path={info.path} /></TabsContent>
-            <TabsContent value="filter"><FilterTab info={info} /></TabsContent>
-            <TabsContent value="dedupe"><DedupeTab info={info} /></TabsContent>
-            <TabsContent value="split"><SplitTab path={info.path} /></TabsContent>
-            <TabsContent value="merge"><MergeTab /></TabsContent>
-            <TabsContent value="sqlite"><SQLiteTab info={info} /></TabsContent>
-          </Tabs>
-        )}
-      </div>
+        </div>
+      ) : (
+        <>
+          <FileInfoBar info={info} />
+          <Toolbar
+            info={info}
+            offset={offset}
+            page={page}
+            onPrev={() => gotoOffset(offset - PAGE_SIZE)}
+            onNext={() => gotoOffset(offset + PAGE_SIZE)}
+            onJump={(o) => gotoOffset(o)}
+            onAction={setAction}
+          />
+          <div className="flex-1 overflow-auto px-4 pb-4">
+            <DataTable
+              page={page}
+              loading={loadingPage}
+              offset={offset}
+              loadStats={loadStatsIfNeeded}
+              stats={stats}
+            />
+          </div>
+        </>
+      )}
 
       {progress && progress.total > 0 && progress.done < progress.total && (
         <ProgressBar p={progress} />
       )}
 
       {dragging && <DropOverlay />}
+
+      {info && (
+        <Sheet open={!!action} onOpenChange={(o) => !o && setAction(null)}>
+          <SheetContent
+            title={actionTitle(action)}
+            description={actionDescription(action)}
+          >
+            {action === "filter" && <FilterAction info={info} onDone={(out) => loadFile(out)} />}
+            {action === "dedupe" && <DedupeAction info={info} onDone={(out) => loadFile(out)} />}
+            {action === "split" && <SplitAction info={info} />}
+            {action === "sqlite" && <SQLiteAction info={info} />}
+            {action === "merge" && <MergeAction />}
+          </SheetContent>
+        </Sheet>
+      )}
     </div>
   );
 }
 
-// ---------- Chrome --------------------------------------------------------
+function actionTitle(a: ActionKind) {
+  switch (a) {
+    case "filter": return "Filter";
+    case "dedupe": return "Dedupe";
+    case "split": return "Split";
+    case "sqlite": return "Export to SQLite";
+    case "merge": return "Merge directory of CSVs";
+    default: return "";
+  }
+}
+function actionDescription(a: ActionKind) {
+  switch (a) {
+    case "filter": return "Keep only rows matching one or more conditions.";
+    case "dedupe": return "Remove duplicate rows by one or more key columns.";
+    case "split": return "Break the file into chunks of N rows each.";
+    case "sqlite": return "Import the file into a SQLite table.";
+    case "merge": return "Combine all CSVs in a directory into one file.";
+    default: return "";
+  }
+}
+
+// ---------- chrome --------------------------------------------------------
 
 function Header({ info, onOpen, loading }: { info: main.FileInfo | null; onOpen: () => void; loading: boolean }) {
   return (
-    <header className="flex items-center justify-between border-b border-border bg-card px-6 py-3">
+    <header className="flex shrink-0 items-center justify-between border-b border-border bg-card px-6 py-3">
       <div className="flex items-center gap-3">
         <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary text-primary-foreground">
           <FileText className="h-4 w-4" />
@@ -201,40 +267,106 @@ function Header({ info, onOpen, loading }: { info: main.FileInfo | null; onOpen:
 
 function FileInfoBar({ info }: { info: main.FileInfo }) {
   return (
-    <div className="flex items-center gap-5 border-b border-border bg-secondary/40 px-6 py-2 text-xs">
-      <code
-        className="max-w-[420px] truncate font-mono text-muted-foreground"
-        title={info.path}
-      >
-        {info.path}
-      </code>
+    <div className="flex shrink-0 items-center gap-5 border-b border-border bg-secondary/40 px-6 py-2 text-xs">
+      <code className="max-w-[420px] truncate font-mono text-muted-foreground" title={info.path}>{info.path}</code>
       <span className="flex items-center gap-1.5 text-muted-foreground">
         <Hash className="h-3 w-3" />
-        <strong className="font-semibold text-foreground">
-          {info.rows.toLocaleString()}
-        </strong>{" "}
-        rows
-      </span>
-      <span className="flex items-center gap-1.5 text-muted-foreground">
-        <HardDrive className="h-3 w-3" />
-        <strong className="font-semibold text-foreground">
-          {formatBytes(info.size)}
-        </strong>
+        <strong className="font-semibold text-foreground">{info.rows.toLocaleString()}</strong> rows
       </span>
       <span className="flex items-center gap-1.5 text-muted-foreground">
         <BarChart3 className="h-3 w-3" />
-        <strong className="font-semibold text-foreground">
-          {(info.headers || []).length}
-        </strong>{" "}
-        columns
+        <strong className="font-semibold text-foreground">{(info.headers || []).length}</strong> columns
       </span>
-      <button
-        onClick={() => RevealFile(info.path)}
-        className="ml-auto flex items-center gap-1 text-muted-foreground transition-colors hover:text-foreground"
-      >
-        <ExternalLink className="h-3 w-3" />
-        Reveal
+      <span className="flex items-center gap-1.5 text-muted-foreground">
+        <HardDrive className="h-3 w-3" />
+        <strong className="font-semibold text-foreground">{formatBytes(info.size)}</strong>
+      </span>
+      <button onClick={() => RevealFile(info.path)} className="ml-auto flex items-center gap-1 text-muted-foreground transition-colors hover:text-foreground">
+        <ExternalLink className="h-3 w-3" />Reveal
       </button>
+    </div>
+  );
+}
+
+function Toolbar({ info, offset, page, onPrev, onNext, onJump, onAction }: {
+  info: main.FileInfo;
+  offset: number;
+  page: main.PagePayload | null;
+  onPrev: () => void;
+  onNext: () => void;
+  onJump: (o: number) => void;
+  onAction: (a: ActionKind) => void;
+}) {
+  const total = page?.totalRows ?? info.rows;
+  const showingFrom = total === 0 ? 0 : offset + 1;
+  const showingTo = Math.min(offset + PAGE_SIZE, total);
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const currentPage = Math.floor(offset / PAGE_SIZE) + 1;
+  const canPrev = offset > 0;
+  const canNext = offset + PAGE_SIZE < total;
+
+  const [pageInput, setPageInput] = useState(String(currentPage));
+  useEffect(() => setPageInput(String(currentPage)), [currentPage]);
+
+  function jumpFromInput() {
+    const n = Math.max(1, Math.min(totalPages, Number(pageInput) || 1));
+    onJump((n - 1) * PAGE_SIZE);
+  }
+
+  return (
+    <div className="flex shrink-0 items-center gap-2 border-b border-border bg-card px-4 py-2">
+      <Button variant="outline" size="sm" onClick={onPrev} disabled={!canPrev}>
+        <ChevronLeft className="h-3.5 w-3.5" />
+      </Button>
+      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        Page
+        <Input
+          className="h-7 w-14 text-center text-xs"
+          value={pageInput}
+          onChange={(e) => setPageInput(e.target.value)}
+          onBlur={jumpFromInput}
+          onKeyDown={(e) => e.key === "Enter" && jumpFromInput()}
+        />
+        of <strong className="text-foreground">{totalPages.toLocaleString()}</strong>
+      </div>
+      <Button variant="outline" size="sm" onClick={onNext} disabled={!canNext}>
+        <ChevronRight className="h-3.5 w-3.5" />
+      </Button>
+      <span className="ml-3 text-xs text-muted-foreground">
+        Rows <strong className="text-foreground">{showingFrom.toLocaleString()}</strong>–
+        <strong className="text-foreground">{showingTo.toLocaleString()}</strong>{" "}
+        of <strong className="text-foreground">{total.toLocaleString()}</strong>
+      </span>
+
+      <div className="ml-auto flex items-center gap-2">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button size="sm">
+              <Wrench className="h-3.5 w-3.5" />
+              Actions
+              <ChevronDown className="h-3.5 w-3.5" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onSelect={() => onAction("filter")}>
+              <FilterIcon className="h-4 w-4" />Filter rows…
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => onAction("dedupe")}>
+              <CopyIcon className="h-4 w-4" />Dedupe…
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => onAction("split")}>
+              <Scissors className="h-4 w-4" />Split into chunks…
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => onAction("sqlite")}>
+              <Database className="h-4 w-4" />Export to SQLite…
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => onAction("merge")}>
+              <Combine className="h-4 w-4" />Merge directory…
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
     </div>
   );
 }
@@ -242,23 +374,19 @@ function FileInfoBar({ info }: { info: main.FileInfo }) {
 function EmptyState({ onOpen }: { onOpen: () => void }) {
   return (
     <div className="flex h-full items-center justify-center">
-      <Card className="w-[460px]">
-        <CardHeader className="items-center text-center">
-          <div className="mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-secondary">
-            <Upload className="h-6 w-6 text-muted-foreground" />
-          </div>
-          <CardTitle>Drop a CSV here</CardTitle>
-          <CardDescription>
-            Or pick one to preview, analyze, and transform — all locally.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex justify-center">
+      <div className="w-[460px] rounded-lg border border-border bg-card p-8 text-center shadow-sm">
+        <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-secondary">
+          <Upload className="h-6 w-6 text-muted-foreground" />
+        </div>
+        <h2 className="text-base font-semibold">Drop a CSV here</h2>
+        <p className="mt-1 text-sm text-muted-foreground">Or pick one — preview, analyze, and transform locally.</p>
+        <div className="mt-5">
           <Button onClick={onOpen}>
             <FolderOpen className="h-4 w-4" />
             Choose CSV file…
           </Button>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </div>
   );
 }
@@ -290,11 +418,123 @@ function ProgressBar({ p }: { p: ProgressEvent }) {
   );
 }
 
-// ---------- Common UI ----------------------------------------------------
+// ---------- table --------------------------------------------------------
 
-function FormField({ label, children, hint }: {
-  label: string; children: React.ReactNode; hint?: string;
+function DataTable({ page, loading, offset, loadStats, stats }: {
+  page: main.PagePayload | null;
+  loading: boolean;
+  offset: number;
+  loadStats: () => Promise<main.StatsPayload | null>;
+  stats: main.StatsPayload | null;
 }) {
+  if (!page) return <div className="p-8 text-sm text-muted-foreground">Loading…</div>;
+
+  return (
+    <div className={`relative h-full overflow-auto rounded-lg border border-border bg-card ${loading ? "opacity-60" : ""}`}>
+      <table className="w-full text-sm">
+        <thead className="sticky top-0 z-10 bg-secondary">
+          <tr>
+            <th className="w-14 border-b border-border px-3 py-2 text-right font-mono text-xs text-muted-foreground">#</th>
+            {page.headers.map((h, i) => (
+              <ColumnHeader key={i} name={h} index={i} loadStats={loadStats} stats={stats} />
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {page.rows.map((r, i) => (
+            <tr key={i} className="border-b border-border last:border-0 hover:bg-secondary/60">
+              <td className="px-3 py-1.5 text-right font-mono text-xs text-muted-foreground">
+                {(offset + i + 1).toLocaleString()}
+              </td>
+              {r.map((c, j) => (
+                <td key={j} className="max-w-[280px] truncate px-3 py-1.5 font-mono text-xs text-foreground" title={c}>
+                  {c}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {page.rows.length === 0 && (
+        <div className="p-8 text-center text-sm text-muted-foreground">No rows on this page.</div>
+      )}
+    </div>
+  );
+}
+
+function ColumnHeader({ name, index, loadStats, stats }: {
+  name: string;
+  index: number;
+  loadStats: () => Promise<main.StatsPayload | null>;
+  stats: main.StatsPayload | null;
+}) {
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const colStats = stats?.columns?.[index];
+
+  async function maybeLoad() {
+    if (!colStats && !loading) {
+      setLoading(true);
+      try { await loadStats(); } finally { setLoading(false); }
+    }
+  }
+
+  return (
+    <th className="border-b border-border px-3 py-2 text-left font-semibold text-foreground">
+      <Popover open={open} onOpenChange={(o) => { setOpen(o); if (o) maybeLoad(); }}>
+        <PopoverTrigger asChild>
+          <button className="-mx-2 flex w-full items-center justify-between gap-2 rounded px-2 py-0.5 text-left transition-colors hover:bg-card">
+            <span className="truncate" title={name}>{name}</span>
+            <ChevronDown className="h-3 w-3 shrink-0 opacity-50" />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent className="w-80">
+          <div className="mb-3 flex items-center justify-between">
+            <h4 className="text-sm font-semibold">{name}</h4>
+            <span className="text-xs text-muted-foreground">column {index + 1}</span>
+          </div>
+          {loading && <div className="text-xs text-muted-foreground">Analyzing…</div>}
+          {!loading && !colStats && <div className="text-xs text-muted-foreground">No stats yet.</div>}
+          {colStats && <ColumnStatsView c={colStats} />}
+        </PopoverContent>
+      </Popover>
+    </th>
+  );
+}
+
+function ColumnStatsView({ c }: { c: main.StatsColumn }) {
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-3 text-sm">
+        <div>
+          <div className="text-xs uppercase tracking-wide text-muted-foreground">Unique</div>
+          <div className="font-semibold">{c.uniqueCapped ? `≥${c.unique}` : c.unique.toLocaleString()}</div>
+        </div>
+        <div>
+          <div className="text-xs uppercase tracking-wide text-muted-foreground">Empty</div>
+          <div className="font-semibold">{c.empty.toLocaleString()}</div>
+        </div>
+      </div>
+      {c.top.length > 0 && (
+        <div>
+          <div className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">Top values</div>
+          <div className="space-y-1">
+            {c.top.map((t, i) => (
+              <div key={i} className="flex items-center justify-between gap-2 text-xs">
+                <span className="truncate font-mono" title={t.value}>{t.value || <em className="text-muted-foreground">(empty)</em>}</span>
+                <span className="rounded bg-secondary px-2 py-0.5 font-semibold">{t.count.toLocaleString()}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------- shared form widgets ------------------------------------------
+
+function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <div className="space-y-1.5">
       <Label>{label}</Label>
@@ -304,189 +544,71 @@ function FormField({ label, children, hint }: {
   );
 }
 
-function FilePicker({ label, value, onPick, icon: Icon }: {
+function PathPicker({ label, value, onPick, icon: Icon = Folder }: {
   label: string; value: string; onPick: () => void; icon?: any;
 }) {
   return (
     <div className="space-y-1.5">
       <Label>{label}</Label>
       <div className="flex items-center gap-2">
-        <Button variant="outline" onClick={onPick}>
-          {Icon ? <Icon className="h-4 w-4" /> : <Folder className="h-4 w-4" />}
-          Choose…
+        <Button variant="outline" size="sm" onClick={onPick}>
+          <Icon className="h-3.5 w-3.5" />Choose…
         </Button>
         {value ? (
-          <code className="flex-1 truncate rounded-md bg-secondary px-3 py-1.5 font-mono text-xs text-muted-foreground" title={value}>
-            {value}
-          </code>
+          <code className="flex-1 truncate rounded-md bg-secondary px-3 py-1.5 font-mono text-xs text-muted-foreground" title={value}>{value}</code>
         ) : (
-          <span className="text-xs italic text-muted-foreground">No file selected</span>
+          <span className="text-xs italic text-muted-foreground">None</span>
         )}
       </div>
     </div>
   );
 }
 
-function ResultBanner({ kind, children, output }: {
-  kind: "success" | "error";
-  children: React.ReactNode;
-  output?: string;
-}) {
+function Banner({ kind, output, children }: { kind: "success" | "error"; output?: string; children: React.ReactNode }) {
   const Icon = kind === "success" ? CheckCircle2 : AlertCircle;
-  const bg =
-    kind === "success"
-      ? "bg-success/10 border-success/30"
-      : "bg-destructive/10 border-destructive/30";
+  const bg = kind === "success" ? "bg-success/10 border-success/30" : "bg-destructive/10 border-destructive/30";
+  const iconColor = kind === "success" ? "text-success" : "text-destructive";
   return (
     <div className={`flex items-start gap-3 rounded-lg border p-3 text-sm ${bg}`}>
-      <Icon className={`mt-0.5 h-4 w-4 shrink-0 ${kind === "success" ? "text-success" : "text-destructive"}`} />
+      <Icon className={`mt-0.5 h-4 w-4 shrink-0 ${iconColor}`} />
       <div className="flex-1 text-foreground">{children}</div>
       {output && (
         <Button size="sm" variant="outline" onClick={() => RevealFile(output)}>
-          <ExternalLink className="h-3.5 w-3.5" />
-          Reveal
+          <ExternalLink className="h-3.5 w-3.5" />Reveal
         </Button>
       )}
     </div>
   );
 }
 
-function RunButton({ onClick, loading, disabled, children }: {
+function GoButton({ onClick, loading, disabled, children }: {
   onClick: () => void; loading: boolean; disabled?: boolean; children: React.ReactNode;
 }) {
   return (
-    <Button onClick={onClick} disabled={loading || disabled}>
+    <Button onClick={onClick} disabled={loading || disabled} className="w-full">
       {loading && <Loader2 className="h-4 w-4 animate-spin" />}
       {children}
     </Button>
   );
 }
 
-function OpCard({ title, description, children }: {
-  title: string; description: string; children: React.ReactNode;
-}) {
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{title}</CardTitle>
-        <CardDescription>{description}</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">{children}</CardContent>
-    </Card>
-  );
-}
+// ---------- actions (slide-over forms) -----------------------------------
 
-// ---------- Preview --------------------------------------------------------
-
-function PreviewTab({ info }: { info: main.FileInfo }) {
-  const [rows, setRows] = useState(20);
-  const [data, setData] = useState<main.PreviewPayload | null>(null);
-  const [err, setErr] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  async function run() {
-    setLoading(true); setErr("");
-    try { setData(await PreviewCSV(info.path, rows, false)); }
-    catch (e: any) { setErr(String(e)); }
-    finally { setLoading(false); }
-  }
-
-  useEffect(() => { run(); /* eslint-disable-next-line */ }, [info.path]);
-
-  return (
-    <OpCard title="Preview" description="Pretty-print the first N rows of the file.">
-      <div className="flex items-end gap-3">
-        <div className="w-32">
-          <FormField label="Rows">
-            <Input type="number" min={1} max={1000} value={rows} onChange={(e) => setRows(Number(e.target.value))} />
-          </FormField>
-        </div>
-        <RunButton onClick={run} loading={loading}>Preview</RunButton>
-      </div>
-      {err && <ResultBanner kind="error">{err}</ResultBanner>}
-      {data && data.rows.length > 0 && (
-        <DataTable headers={data.headers} rows={data.rows} caption={`${data.rows.length} row(s)`} />
-      )}
-    </OpCard>
-  );
-}
-
-// ---------- Stats ---------------------------------------------------------
-
-function StatsTab({ path }: { path: string }) {
-  const [maxUnique, setMaxUnique] = useState(100000);
-  const [data, setData] = useState<main.StatsPayload | null>(null);
-  const [err, setErr] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  async function run() {
-    setLoading(true); setErr("");
-    try { setData(await StatsCSV(path, maxUnique)); }
-    catch (e: any) { setErr(String(e)); }
-    finally { setLoading(false); }
-  }
-
-  return (
-    <OpCard title="Stats" description="Per-column unique values, empty cells, and top values.">
-      <div className="flex items-end gap-3">
-        <div className="w-48">
-          <FormField label="Max unique tracked" hint="Caps memory on high-cardinality columns.">
-            <Input type="number" min={0} value={maxUnique} onChange={(e) => setMaxUnique(Number(e.target.value))} />
-          </FormField>
-        </div>
-        <RunButton onClick={run} loading={loading}>Analyze</RunButton>
-      </div>
-      {err && <ResultBanner kind="error">{err}</ResultBanner>}
-      {data && (
-        <>
-          <div className="flex gap-6 text-sm text-muted-foreground">
-            <span>Total rows: <strong className="text-foreground">{data.totalRows.toLocaleString()}</strong></span>
-            <span>Columns: <strong className="text-foreground">{data.columns.length}</strong></span>
-          </div>
-          <DataTable
-            headers={["Column", "Unique", "Empty", "Top 3"]}
-            rows={data.columns.map((c) => [
-              c.name,
-              c.uniqueCapped ? `≥${c.unique} (capped)` : String(c.unique),
-              String(c.empty),
-              c.top.map((t) => `${t.value} (${t.count})`).join(", "),
-            ])}
-          />
-        </>
-      )}
-    </OpCard>
-  );
-}
-
-// ---------- Filter --------------------------------------------------------
-
-function FilterTab({ info }: { info: main.FileInfo }) {
+function FilterAction({ info, onDone }: { info: main.FileInfo; onDone: (output: string) => void }) {
   const headers = info.headers || [];
   const [column, setColumn] = useState(headers[0] || "");
-  useEffect(() => { setColumn(headers[0] || ""); }, [info.path]);
-
-  const [eqSet, setEqSet] = useState(false);
-  const [eq, setEq] = useState("");
-  const [containsSet, setContainsSet] = useState(false);
-  const [contains, setContains] = useState("");
-  const [gtSet, setGtSet] = useState(false);
-  const [gt, setGt] = useState(0);
-  const [ltSet, setLtSet] = useState(false);
-  const [lt, setLt] = useState(0);
+  const [eqSet, setEqSet] = useState(false); const [eq, setEq] = useState("");
+  const [containsSet, setContainsSet] = useState(false); const [contains, setContains] = useState("");
+  const [gtSet, setGtSet] = useState(false); const [gt, setGt] = useState(0);
+  const [ltSet, setLtSet] = useState(false); const [lt, setLt] = useState(0);
   const [all, setAll] = useState(false);
   const [output, setOutput] = useState(suggestOutput(info.path, "filtered"));
-  useEffect(() => { setOutput(suggestOutput(info.path, "filtered")); }, [info.path]);
-
   const [result, setResult] = useState<main.FilterPayload | null>(null);
-  const [err, setErr] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(""); const [loading, setLoading] = useState(false);
 
-  async function pickOutput() {
-    const p = await SaveCSVFile(output || "filtered.csv");
-    if (p) setOutput(p);
-  }
+  async function pickOutput() { const p = await SaveCSVFile(output || "filtered.csv"); if (p) setOutput(p); }
   async function run() {
-    if (!output) { setErr("Choose an output file first."); return; }
+    if (!output) { setErr("Choose an output file."); return; }
     setLoading(true); setErr(""); setResult(null);
     try {
       setResult(await FilterCSV({
@@ -499,53 +621,53 @@ function FilterTab({ info }: { info: main.FileInfo }) {
   }
 
   return (
-    <OpCard title="Filter" description="Keep only rows matching one or more conditions.">
-      <FormField label="Column">
+    <div className="space-y-4">
+      <Field label="Column">
         <Select value={column} onValueChange={setColumn}>
-          <SelectTrigger><SelectValue placeholder="Pick a column…" /></SelectTrigger>
+          <SelectTrigger><SelectValue /></SelectTrigger>
           <SelectContent>
             {headers.map((h) => <SelectItem key={h} value={h}>{h}</SelectItem>)}
           </SelectContent>
         </Select>
-      </FormField>
+      </Field>
 
       <div className="space-y-2">
         <Label>Conditions</Label>
-        <ConditionRow checked={eqSet} onCheck={setEqSet} label="equals">
+        <Cond checked={eqSet} onCheck={setEqSet} label="equals">
           <Input value={eq} disabled={!eqSet} onChange={(e) => setEq(e.target.value)} placeholder="value" />
-        </ConditionRow>
-        <ConditionRow checked={containsSet} onCheck={setContainsSet} label="contains">
+        </Cond>
+        <Cond checked={containsSet} onCheck={setContainsSet} label="contains">
           <Input value={contains} disabled={!containsSet} onChange={(e) => setContains(e.target.value)} placeholder="substring" />
-        </ConditionRow>
-        <ConditionRow checked={gtSet} onCheck={setGtSet} label="greater than">
+        </Cond>
+        <Cond checked={gtSet} onCheck={setGtSet} label="greater than">
           <Input type="number" value={gt} disabled={!gtSet} onChange={(e) => setGt(Number(e.target.value))} />
-        </ConditionRow>
-        <ConditionRow checked={ltSet} onCheck={setLtSet} label="less than">
+        </Cond>
+        <Cond checked={ltSet} onCheck={setLtSet} label="less than">
           <Input type="number" value={lt} disabled={!ltSet} onChange={(e) => setLt(Number(e.target.value))} />
-        </ConditionRow>
-
+        </Cond>
         <label className="flex cursor-pointer items-center gap-2 pt-2 text-sm">
           <Checkbox checked={all} onCheckedChange={(v) => setAll(!!v)} />
-          Match <strong>ALL</strong> conditions (AND), not ANY (OR)
+          Match <strong>ALL</strong> conditions (AND)
         </label>
       </div>
 
-      <FilePicker label="Output file" value={output} onPick={pickOutput} icon={Save} />
+      <PathPicker label="Output file" value={output} onPick={pickOutput} icon={Save} />
 
-      <RunButton onClick={run} loading={loading} disabled={!column}>Run filter</RunButton>
+      <GoButton onClick={run} loading={loading} disabled={!column}>Run filter</GoButton>
 
-      {err && <ResultBanner kind="error">{err}</ResultBanner>}
+      {err && <Banner kind="error">{err}</Banner>}
       {result && (
-        <ResultBanner kind="success" output={output}>
+        <Banner kind="success" output={output}>
           Matched <strong>{result.matched.toLocaleString()}</strong> of{" "}
-          <strong>{result.totalRows.toLocaleString()}</strong> rows.
-        </ResultBanner>
+          <strong>{result.totalRows.toLocaleString()}</strong> rows.{" "}
+          <button className="underline" onClick={() => onDone(output)}>Open result</button>
+        </Banner>
       )}
-    </OpCard>
+    </div>
   );
 }
 
-function ConditionRow({ checked, onCheck, label, children }: {
+function Cond({ checked, onCheck, label, children }: {
   checked: boolean; onCheck: (v: boolean) => void; label: string; children: React.ReactNode;
 }) {
   return (
@@ -557,30 +679,20 @@ function ConditionRow({ checked, onCheck, label, children }: {
   );
 }
 
-// ---------- Dedupe --------------------------------------------------------
-
-function DedupeTab({ info }: { info: main.FileInfo }) {
+function DedupeAction({ info, onDone }: { info: main.FileInfo; onDone: (output: string) => void }) {
   const headers = info.headers || [];
   const [picked, setPicked] = useState<string[]>([]);
-  useEffect(() => { setPicked([]); }, [info.path]);
   const keysCSV = useMemo(() => picked.join(","), [picked]);
-
   const [keepLast, setKeepLast] = useState(false);
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [output, setOutput] = useState(suggestOutput(info.path, "dedup"));
-  useEffect(() => { setOutput(suggestOutput(info.path, "dedup")); }, [info.path]);
-
   const [result, setResult] = useState<main.DedupePayload | null>(null);
-  const [err, setErr] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(""); const [loading, setLoading] = useState(false);
 
-  function toggle(h: string) {
-    setPicked((p) => p.includes(h) ? p.filter((x) => x !== h) : [...p, h]);
-  }
-
+  function toggle(h: string) { setPicked((p) => p.includes(h) ? p.filter((x) => x !== h) : [...p, h]); }
   async function pickOutput() { const p = await SaveCSVFile(output || "dedup.csv"); if (p) setOutput(p); }
   async function run() {
-    if (!output) { setErr("Choose an output file first."); return; }
+    if (!output) { setErr("Choose an output file."); return; }
     if (picked.length === 0) { setErr("Pick at least one key column."); return; }
     setLoading(true); setErr(""); setResult(null);
     try { setResult(await DedupeCSV({ input: info.path, output, keyColumns: keysCSV, keepLast, caseSensitive } as any)); }
@@ -589,117 +701,90 @@ function DedupeTab({ info }: { info: main.FileInfo }) {
   }
 
   return (
-    <OpCard title="Dedupe" description="Remove duplicate rows by one or more key columns. Output preserves original file order.">
-      <div className="space-y-1.5">
-        <Label>Key columns ({picked.length} selected)</Label>
+    <div className="space-y-4">
+      <Field label={`Key columns (${picked.length} selected)`}>
         <div className="flex flex-wrap gap-2">
           {headers.map((h) => {
             const on = picked.includes(h);
             return (
-              <button
-                key={h}
-                onClick={() => toggle(h)}
-                className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
-                  on
-                    ? "border-primary bg-primary text-primary-foreground"
-                    : "border-border bg-card text-foreground hover:bg-secondary"
-                }`}
-              >
+              <button key={h} onClick={() => toggle(h)}
+                className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${on ? "border-primary bg-primary text-primary-foreground" : "border-border bg-card text-foreground hover:bg-secondary"}`}>
                 {h}
               </button>
             );
           })}
         </div>
-      </div>
-
+      </Field>
       <div className="flex flex-wrap gap-5">
         <label className="flex cursor-pointer items-center gap-2 text-sm">
           <Checkbox checked={keepLast} onCheckedChange={(v) => setKeepLast(!!v)} />
-          Keep last occurrence (default keeps first)
+          Keep last occurrence
         </label>
         <label className="flex cursor-pointer items-center gap-2 text-sm">
           <Checkbox checked={caseSensitive} onCheckedChange={(v) => setCaseSensitive(!!v)} />
           Case-sensitive
         </label>
       </div>
-
-      <FilePicker label="Output file" value={output} onPick={pickOutput} icon={Save} />
-      <RunButton onClick={run} loading={loading}>Run dedupe</RunButton>
-
-      {err && <ResultBanner kind="error">{err}</ResultBanner>}
+      <PathPicker label="Output file" value={output} onPick={pickOutput} icon={Save} />
+      <GoButton onClick={run} loading={loading}>Run dedupe</GoButton>
+      {err && <Banner kind="error">{err}</Banner>}
       {result && (
-        <ResultBanner kind="success" output={output}>
-          Kept <strong>{result.uniqueRows.toLocaleString()}</strong> unique row(s),
-          removed <strong>{result.duplicates.toLocaleString()}</strong> duplicates from{" "}
-          <strong>{result.totalRows.toLocaleString()}</strong> total.
-        </ResultBanner>
+        <Banner kind="success" output={output}>
+          Kept <strong>{result.uniqueRows.toLocaleString()}</strong>, removed{" "}
+          <strong>{result.duplicates.toLocaleString()}</strong> duplicates.{" "}
+          <button className="underline" onClick={() => onDone(output)}>Open result</button>
+        </Banner>
       )}
-    </OpCard>
+    </div>
   );
 }
 
-// ---------- Split --------------------------------------------------------
-
-function SplitTab({ path }: { path: string }) {
+function SplitAction({ info }: { info: main.FileInfo }) {
   const [outDir, setOutDir] = useState("");
   const [rowsPerFile, setRowsPerFile] = useState(1000);
   const [withHeader, setWithHeader] = useState(true);
   const [result, setResult] = useState<main.SplitPayload | null>(null);
-  const [err, setErr] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(""); const [loading, setLoading] = useState(false);
 
   async function pickOutDir() { const p = await OpenDirectory("Select output directory"); if (p) setOutDir(p); }
   async function run() {
-    if (!outDir) { setErr("Choose an output directory first."); return; }
+    if (!outDir) { setErr("Choose an output directory."); return; }
     setLoading(true); setErr(""); setResult(null);
-    try { setResult(await SplitCSV({ input: path, outputDir: outDir, rowsPerFile, withHeader } as any)); }
+    try { setResult(await SplitCSV({ input: info.path, outputDir: outDir, rowsPerFile, withHeader } as any)); }
     catch (e: any) { setErr(String(e)); }
     finally { setLoading(false); }
   }
 
   return (
-    <OpCard title="Split" description="Break a large CSV into chunks of N rows each.">
-      <div className="grid grid-cols-2 gap-4">
-        <FormField label="Rows per output file">
-          <Input type="number" min={1} value={rowsPerFile} onChange={(e) => setRowsPerFile(Number(e.target.value))} />
-        </FormField>
-        <div className="flex items-end">
-          <label className="flex cursor-pointer items-center gap-2 text-sm">
-            <Checkbox checked={withHeader} onCheckedChange={(v) => setWithHeader(!!v)} />
-            Include header in each chunk
-          </label>
-        </div>
-      </div>
-      <FilePicker label="Output directory" value={outDir} onPick={pickOutDir} icon={Folder} />
-      <RunButton onClick={run} loading={loading}>Run split</RunButton>
-      {err && <ResultBanner kind="error">{err}</ResultBanner>}
+    <div className="space-y-4">
+      <Field label="Rows per output file">
+        <Input type="number" min={1} value={rowsPerFile} onChange={(e) => setRowsPerFile(Number(e.target.value))} />
+      </Field>
+      <label className="flex cursor-pointer items-center gap-2 text-sm">
+        <Checkbox checked={withHeader} onCheckedChange={(v) => setWithHeader(!!v)} />
+        Include header in each chunk
+      </label>
+      <PathPicker label="Output directory" value={outDir} onPick={pickOutDir} />
+      <GoButton onClick={run} loading={loading}>Run split</GoButton>
+      {err && <Banner kind="error">{err}</Banner>}
       {result && (
-        <ResultBanner kind="success" output={outDir}>
+        <Banner kind="success" output={outDir}>
           Wrote <strong>{result.filesCreated}</strong> file(s),{" "}
           <strong>{result.rowsProcessed.toLocaleString()}</strong> row(s) total.
-        </ResultBanner>
+        </Banner>
       )}
-    </OpCard>
+    </div>
   );
 }
 
-// ---------- Merge --------------------------------------------------------
-
-function MergeTab() {
+function MergeAction() {
   const [inDir, setInDir] = useState("");
   const [output, setOutput] = useState("");
   const [withHeader, setWithHeader] = useState(true);
   const [result, setResult] = useState<main.MergePayload | null>(null);
-  const [err, setErr] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(""); const [loading, setLoading] = useState(false);
 
-  async function pickInDir() {
-    const p = await OpenDirectory("Select directory of CSV files");
-    if (p) {
-      setInDir(p);
-      if (!output) setOutput(suggestOutput(p + "/merged", "csv", ""));
-    }
-  }
+  async function pickInDir() { const p = await OpenDirectory("Select directory of CSV files"); if (p) setInDir(p); }
   async function pickOutput() { const p = await SaveCSVFile(output || "merged.csv"); if (p) setOutput(p); }
   async function run() {
     if (!inDir) { setErr("Choose an input directory."); return; }
@@ -711,40 +796,35 @@ function MergeTab() {
   }
 
   return (
-    <OpCard title="Merge" description="Combine all CSV files in a directory into one output file.">
-      <FilePicker label="Input directory" value={inDir} onPick={pickInDir} icon={Folder} />
-      <FilePicker label="Output file" value={output} onPick={pickOutput} icon={Save} />
+    <div className="space-y-4">
+      <PathPicker label="Input directory" value={inDir} onPick={pickInDir} />
+      <PathPicker label="Output file" value={output} onPick={pickOutput} icon={Save} />
       <label className="flex cursor-pointer items-center gap-2 text-sm">
         <Checkbox checked={withHeader} onCheckedChange={(v) => setWithHeader(!!v)} />
-        Use header from the first file
+        Use header from first file
       </label>
-      <RunButton onClick={run} loading={loading}>Run merge</RunButton>
-      {err && <ResultBanner kind="error">{err}</ResultBanner>}
+      <GoButton onClick={run} loading={loading}>Run merge</GoButton>
+      {err && <Banner kind="error">{err}</Banner>}
       {result && (
-        <ResultBanner kind="success" output={output}>
+        <Banner kind="success" output={output}>
           Merged <strong>{result.filesProcessed}</strong> file(s),{" "}
           <strong>{result.rowsWritten.toLocaleString()}</strong> row(s).
-        </ResultBanner>
+        </Banner>
       )}
-    </OpCard>
+    </div>
   );
 }
 
-// ---------- ToSQLite ----------------------------------------------------
-
-function SQLiteTab({ info }: { info: main.FileInfo }) {
+function SQLiteAction({ info }: { info: main.FileInfo }) {
   const [dbPath, setDbPath] = useState(suggestOutput(info.path, "data", ".db"));
-  useEffect(() => { setDbPath(suggestOutput(info.path, "data", ".db")); }, [info.path]);
-
   const [table, setTable] = useState("");
   const [ifExists, setIfExists] = useState("replace");
   const [result, setResult] = useState<main.ToSQLitePayload | null>(null);
-  const [err, setErr] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(""); const [loading, setLoading] = useState(false);
 
   async function pickDB() { const p = await SaveDBFile(dbPath || "data.db"); if (p) setDbPath(p); }
   async function run() {
-    if (!dbPath) { setErr("Choose an output .db file first."); return; }
+    if (!dbPath) { setErr("Choose an output .db file."); return; }
     setLoading(true); setErr(""); setResult(null);
     try { setResult(await ToSQLiteCSV({ input: info.path, dbPath, table, ifExists } as any)); }
     catch (e: any) { setErr(String(e)); }
@@ -752,74 +832,30 @@ function SQLiteTab({ info }: { info: main.FileInfo }) {
   }
 
   return (
-    <OpCard title="To SQLite" description="Import the CSV into a SQLite database table (all columns as TEXT).">
-      <div className="grid grid-cols-2 gap-4">
-        <FormField label="Table name" hint="Defaults to the input filename.">
-          <Input value={table} onChange={(e) => setTable(e.target.value)} placeholder="users" />
-        </FormField>
-        <FormField label="If table exists">
-          <Select value={ifExists} onValueChange={setIfExists}>
-            <SelectTrigger><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="replace">replace — drop and re-create</SelectItem>
-              <SelectItem value="append">append — add rows to existing</SelectItem>
-              <SelectItem value="skip">skip — do nothing if exists</SelectItem>
-              <SelectItem value="fail">fail — error if exists</SelectItem>
-            </SelectContent>
-          </Select>
-        </FormField>
-      </div>
-      <FilePicker label="Output database (.db)" value={dbPath} onPick={pickDB} icon={Database} />
-      <RunButton onClick={run} loading={loading}>Run import</RunButton>
-      {err && <ResultBanner kind="error">{err}</ResultBanner>}
-      {result?.skipped && (
-        <ResultBanner kind="success" output={dbPath}>
-          Table <code>{result.table}</code> already exists — skipped.
-        </ResultBanner>
-      )}
+    <div className="space-y-4">
+      <Field label="Table name" hint="Defaults to the input filename.">
+        <Input value={table} onChange={(e) => setTable(e.target.value)} placeholder="users" />
+      </Field>
+      <Field label="If table exists">
+        <Select value={ifExists} onValueChange={setIfExists}>
+          <SelectTrigger><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="replace">replace — drop and re-create</SelectItem>
+            <SelectItem value="append">append — add rows to existing</SelectItem>
+            <SelectItem value="skip">skip — do nothing if exists</SelectItem>
+            <SelectItem value="fail">fail — error if exists</SelectItem>
+          </SelectContent>
+        </Select>
+      </Field>
+      <PathPicker label="Output database (.db)" value={dbPath} onPick={pickDB} icon={Database} />
+      <GoButton onClick={run} loading={loading}>Run import</GoButton>
+      {err && <Banner kind="error">{err}</Banner>}
+      {result?.skipped && <Banner kind="success" output={dbPath}>Table <code>{result.table}</code> already exists — skipped.</Banner>}
       {result && !result.skipped && (
-        <ResultBanner kind="success" output={dbPath}>
-          Imported <strong>{result.rowsImported.toLocaleString()}</strong> row(s) into table{" "}
+        <Banner kind="success" output={dbPath}>
+          Imported <strong>{result.rowsImported.toLocaleString()}</strong> row(s) into{" "}
           <code>{result.table}</code>.
-        </ResultBanner>
-      )}
-    </OpCard>
-  );
-}
-
-// ---------- Data table ---------------------------------------------------
-
-function DataTable({ headers, rows, caption }: {
-  headers: string[]; rows: string[][]; caption?: string;
-}) {
-  return (
-    <div className="overflow-hidden rounded-lg border border-border">
-      <div className="max-h-[420px] overflow-auto">
-        <table className="w-full text-sm">
-          <thead className="sticky top-0 z-10 bg-secondary">
-            <tr>
-              {headers.map((h, i) => (
-                <th key={i} className="border-b border-border px-3 py-2 text-left font-semibold text-foreground">
-                  {h}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r, i) => (
-              <tr key={i} className="border-b border-border last:border-0 hover:bg-secondary/60">
-                {r.map((c, j) => (
-                  <td key={j} className="px-3 py-2 font-mono text-xs text-foreground" title={c}>{c}</td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      {caption && (
-        <div className="border-t border-border bg-secondary/50 px-3 py-1.5 text-xs text-muted-foreground">
-          {caption}
-        </div>
+        </Banner>
       )}
     </div>
   );
