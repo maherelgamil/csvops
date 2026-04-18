@@ -4,7 +4,13 @@
 [![License](https://img.shields.io/github/license/maherelgamil/csvops)](LICENSE)
 [![Stars](https://img.shields.io/github/stars/maherelgamil/csvops?style=social)](https://github.com/maherelgamil/csvops/stargazers)
 
-A fast, modular command-line toolkit for working with CSV files. Built in Go — single static binary, no runtime dependencies.
+A fast CSV toolkit shipped three ways:
+
+- 🖥️ **CLI** — single static Go binary for scripts and pipelines.
+- 📦 **Library** — `github.com/maherelgamil/csvops/pkg/csvops` for embedding in Go programs.
+- 🪟 **Desktop app** — paginated table view + one-click operations, built with Wails.
+
+All three share the same engine: streaming CSV ops with progress callbacks and `context.Context` cancellation.
 
 ```bash
 csvops split    --input big.csv     --rows 10000 --output-dir ./parts
@@ -16,7 +22,7 @@ csvops merge    --input-dir ./parts --output all.csv
 csvops to-sqlite --input data.csv   --output data.db
 ```
 
-## Install
+## Install (CLI)
 
 ### Homebrew
 
@@ -36,17 +42,54 @@ cd csvops
 go build -o csvops .
 ```
 
+## Desktop app
+
+Download the latest from [Releases](https://github.com/maherelgamil/csvops/releases) (look for tags starting with `desktop-v`):
+
+- `csvops-desktop-macos-universal.zip` — macOS arm64 + amd64 fat binary
+- `csvops-desktop-windows-amd64.zip` — Windows x64
+
+> **macOS first launch**: the app is currently ad-hoc signed, so Gatekeeper will block it. Open **System Settings → Privacy & Security**, scroll down, and click **"Open Anyway"** next to the warning. Apple Developer ID signing is on the roadmap.
+
+What it does:
+- Open or **drag a CSV** onto the window.
+- Browse the whole file in a paginated table (50–1000 rows/page).
+- Click any column header for instant **per-column stats** (unique, empty, top values).
+- Run **Filter / Dedupe / Split / Export to SQLite / Merge** from the Actions menu — output is auto-suggested next to the input. Success banners include a Reveal-in-Finder button.
+
+Build it yourself: see [`desktop/README.md`](./desktop/README.md).
+
+## Library
+
+Use the same CSV engine in your own Go program:
+
+```go
+import "github.com/maherelgamil/csvops/pkg/csvops"
+
+ctx := context.Background()
+res, err := csvops.Filter(ctx, csvops.FilterOptions{
+    Input:      "users.csv",
+    Output:     os.Stdout,
+    Column:     "country",
+    Eq:         strPtr("Egypt"),
+    WithHeader: true,
+    Progress:   func(done, total int64) { /* update UI */ },
+})
+```
+
+Each operation (`Split`, `Dedupe`, `Filter`, `Merge`, `Stats`, `Preview`, `ToSQLite`) takes a typed `Options` struct and returns a typed `Result`. See [`pkg/csvops/`](./pkg/csvops/) and the test files for full examples.
+
 ## Commands
 
-| Command     | Purpose                                           |
-| ----------- | ------------------------------------------------- |
-| `split`     | Split a large CSV into smaller chunks             |
-| `merge`     | Combine all CSV files in a directory into one     |
-| `dedupe`    | Remove duplicate rows by one or more key columns  |
+| Command     | Purpose                                            |
+| ----------- | -------------------------------------------------- |
+| `split`     | Split a large CSV into smaller chunks              |
+| `merge`     | Combine all CSV files in a directory into one      |
+| `dedupe`    | Remove duplicate rows by one or more key columns   |
 | `filter`    | Keep rows matching `eq` / `contains` / `gt` / `lt` |
 | `stats`     | Row counts, unique values, empty cells, top values |
-| `preview`   | Pretty-print the first N rows as a table          |
-| `to-sqlite` | Import a CSV into a SQLite database               |
+| `preview`   | Pretty-print the first N rows as a table           |
+| `to-sqlite` | Import a CSV into a SQLite database                |
 
 Run `csvops <command> --help` for the full flag list, or see [`docs/commands/`](./docs/commands).
 
@@ -120,6 +163,15 @@ csvops to-sqlite --input data.csv --output data.db --table users --if-exists app
 - Default table name is derived from the input filename.
 - `--if-exists` modes: `replace` (default, drops then re-creates), `append` (insert into existing), `skip` (no-op if table exists), `fail` (error if table exists).
 
+## Repo layout
+
+```
+cmd/                CLI commands (Cobra) — thin wrappers over pkg/csvops
+pkg/csvops/         The CSV engine: Split, Dedupe, Filter, Merge, Stats, Preview, ToSQLite
+desktop/            Wails React+TS desktop app, imports pkg/csvops
+docs/commands/      Per-command CLI documentation
+```
+
 ## Contributing
 
 PRs welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
@@ -128,6 +180,7 @@ PRs welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 go build -o csvops .
 go fmt ./...
 go vet ./...
+go test ./...
 ```
 
 ## License
