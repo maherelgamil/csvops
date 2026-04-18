@@ -1,11 +1,11 @@
 package cmd
 
 import (
-	"encoding/csv"
+	"context"
 	"fmt"
-	"io"
 	"os"
 
+	"github.com/maherelgamil/csvops/pkg/csvops"
 	"github.com/olekukonko/tablewriter"
 	"github.com/spf13/cobra"
 )
@@ -24,37 +24,21 @@ var previewCmd = &cobra.Command{
 			return fmt.Errorf("please provide an input file using --input")
 		}
 
-		file, err := os.Open(previewInput)
+		res, err := csvops.Preview(context.Background(), csvops.PreviewOptions{
+			Input:     previewInput,
+			Rows:      previewRows,
+			NoHeader:  previewNoHeader,
+			Delimiter: ',',
+		})
 		if err != nil {
-			return fmt.Errorf("failed to open file: %w", err)
-		}
-		defer file.Close()
-
-		reader := csv.NewReader(file)
-		reader.FieldsPerRecord = -1
-
-		var headers []string
-		if !previewNoHeader {
-			headers, err = reader.Read()
-			if err != nil {
-				return fmt.Errorf("failed to read header: %w", err)
-			}
+			return err
 		}
 
-		rows := [][]string{}
-		for len(rows) < previewRows {
-			record, err := reader.Read()
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				fmt.Printf("⚠️  Skipping row due to error: %v\n", err)
-				continue
-			}
-			rows = append(rows, record)
+		for _, e := range res.SkipErrors {
+			fmt.Printf("⚠️  Skipping row due to error: %v\n", e)
 		}
 
-		if len(rows) == 0 {
+		if len(res.Rows) == 0 {
 			fmt.Println("⚠️  No data rows found")
 			return nil
 		}
@@ -65,15 +49,15 @@ var previewCmd = &cobra.Command{
 		table.SetAlignment(tablewriter.ALIGN_LEFT)
 		table.SetRowLine(true)
 
-		if !previewNoHeader {
-			table.SetHeader(headers)
+		if len(res.Headers) > 0 {
+			table.SetHeader(res.Headers)
 		}
-		for _, row := range rows {
+		for _, row := range res.Rows {
 			table.Append(row)
 		}
-
 		table.Render()
-		fmt.Printf("\n📄 Showing %d row(s) from '%s'\n", len(rows), previewInput)
+
+		fmt.Printf("\n📄 Showing %d row(s) from '%s'\n", len(res.Rows), previewInput)
 		return nil
 	},
 }
