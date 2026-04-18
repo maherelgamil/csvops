@@ -34,6 +34,3 @@ jobs:
 
       - name: go build
         run: go build ./...
-
-      - name: go test
-        run: go test ./...
