@@ -7,8 +7,8 @@ import (
 	"testing"
 )
 
-func ptrStr(s string) *string    { return &s }
-func ptrF64(f float64) *float64  { return &f }
+func ptrStr(s string) *string   { return &s }
+func ptrF64(f float64) *float64 { return &f }
 
 func runFilter(t *testing.T, csvBody string, opts FilterOptions) (string, FilterResult) {
 	t.Helper()

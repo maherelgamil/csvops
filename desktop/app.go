@@ -89,9 +89,9 @@ func (a *App) OpenDirectory(title string) (string, error) {
 // ----- File metadata --------------------------------------------------------
 
 type FileInfo struct {
-	Path    string `json:"path"`
-	Size    int64  `json:"size"`
-	Rows    int64  `json:"rows"`
+	Path    string   `json:"path"`
+	Size    int64    `json:"size"`
+	Rows    int64    `json:"rows"`
 	Headers []string `json:"headers"`
 }
 

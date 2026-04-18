@@ -19,9 +19,9 @@ type PreviewOptions struct {
 
 // PreviewResult is returned from Preview.
 type PreviewResult struct {
-	Headers   []string   // empty when NoHeader is true
-	Rows      [][]string // up to opts.Rows rows
-	SkipErrors []error   // per-row parse errors that were skipped
+	Headers    []string   // empty when NoHeader is true
+	Rows       [][]string // up to opts.Rows rows
+	SkipErrors []error    // per-row parse errors that were skipped
 }
 
 // Preview reads the first Rows data rows of the CSV and returns them in memory.

@@ -26,10 +26,10 @@ const (
 
 // ToSQLiteOptions configures a ToSQLite operation.
 type ToSQLiteOptions struct {
-	Input    string
-	DBPath   string
-	Table    string // defaults to sanitized input filename
-	IfExists IfExistsAction
+	Input     string
+	DBPath    string
+	Table     string // defaults to sanitized input filename
+	IfExists  IfExistsAction
 	Delimiter rune
 	Progress  Progress
 }

@@ -26,10 +26,10 @@ func queryCount(t *testing.T, dbPath, table string) int {
 
 func TestQuoteIdent(t *testing.T) {
 	tests := map[string]string{
-		"users":                       `"users"`,
-		"my table":                    `"my table"`,
-		`weird"; drop table x; --`:    `"weird""; drop table x; --"`,
-		`a"b"c`:                       `"a""b""c"`,
+		"users":                    `"users"`,
+		"my table":                 `"my table"`,
+		`weird"; drop table x; --`: `"weird""; drop table x; --"`,
+		`a"b"c`:                    `"a""b""c"`,
 	}
 	for in, want := range tests {
 		if got := QuoteIdent(in); got != want {
@@ -173,8 +173,8 @@ func TestToSQLite_IfExistsReplace(t *testing.T) {
 
 func TestSanitizeTableName(t *testing.T) {
 	tests := map[string]string{
-		"/a/b/users.csv":      "users",
-		"/a/b/my file.csv":    "my_file",
+		"/a/b/users.csv":        "users",
+		"/a/b/my file.csv":      "my_file",
 		"/a/b/weird$$chars.csv": "weird__chars",
 	}
 	for in, want := range tests {
